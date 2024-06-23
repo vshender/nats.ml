@@ -32,6 +32,9 @@ module Headers : sig
       match [key] or an empty list. *)
   val values : string -> t -> string list
 
+  (** [iter f headers] applies [f] in turn to all elements of [headers]. *)
+  val iter : (string -> string -> unit) -> t -> unit
+
   (** [fold f headers init] computes [(f kN vN ... (f k2 v2 (f k1 v1 init)) ...)],
       where [(k1, v1), ..., (kN, vN)] are the elements of [headers].  Each
       header is presented exactly once to [f]. *)

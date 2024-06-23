@@ -1,6 +1,6 @@
 (library
  (name nats)
  (public_name nats)
- (libraries angstrom)
+ (libraries angstrom faraday)
   (preprocess
   (pps ppx_deriving.std ppx_deriving_yojson)))

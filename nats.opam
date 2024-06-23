@@ -8,6 +8,7 @@ dev-repo: "git+https://github.com:vshender/nats.ml.git"
 depends: [
   "ocaml" {>= "4.14.0"}
   "angstrom" {>= "0.16.0"}
+  "faraday" {>= "0.8.2"}
   "ppx_deriving" {>= "6.0.2"}
   "ppx_deriving_yojson" {>= "3.8.0"}
   "dune" {>= "3.15.3"}

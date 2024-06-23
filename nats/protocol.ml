@@ -21,6 +21,11 @@ module Headers = struct
       (fun (k, v) -> if String.equal k key then Some v else None)
       headers
 
+  let iter f { headers; _ } =
+    List.iter
+      (fun (key, value) -> f key value)
+      headers
+
   let fold f { headers; _ } init =
     List.fold_left
       (fun acc (key, value) -> f key value acc)

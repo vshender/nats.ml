@@ -2,3 +2,4 @@
 
 module Protocol = Protocol
 module Parse = Parse
+module Serialize = Serialize
