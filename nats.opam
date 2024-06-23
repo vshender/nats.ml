@@ -1,0 +1,16 @@
+opam-version: "2.0"
+maintainer: "Vadim Shender <vadim@shender.org>"
+authors: [ "Vadim Shender <vadim@shender.org>" ]
+license: "ISC"
+homepage: "https://github.com/vshender/nats.ml"
+bug-reports: "https://github.com/vshender/nats.ml/issues"
+dev-repo: "git+https://github.com:vshender/nats.ml.git"
+depends: [
+  "ocaml" {>= "4.14.0"}
+  "angstrom" {>= "0.16.0"}
+  "ppx_deriving" {>= "6.0.2"}
+  "ppx_deriving_yojson" {>= "3.8.0"}
+  "dune" {>= "3.15.3"}
+  "alcotest" {with-test & >= "1.7.0"}
+]
+synopsis: "OCaml client for NATS, the cloud native messaging system"
