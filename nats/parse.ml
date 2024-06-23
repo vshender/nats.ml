@@ -18,6 +18,11 @@ module P = struct
   let is_token = function
     | ' ' | '\t' | '\r' | '\n' -> false
     | _                        -> true
+
+  (** [is_digit c] is true if [c] is a digit. *)
+  let is_digit = function
+    | '0' .. '9' -> true
+    | _          -> false
 end
 
 (** [skip_str_ci s] accepts the sting [s], ignoring case, and discards it.
@@ -32,6 +37,12 @@ let skip_str_ci s =
 let token =
   take_while1 P.is_token
   <|> fail "token expected"
+
+(** [digits1] accepts a sequence of at least one digit and returns the accepted
+    characters. *)
+let digits1 =
+  take_while1 P.is_digit
+  <|> fail "digits expected"
 
 (** [spaces] accepts a sequence of zero or more whitespace characters and
     discards it. *)
@@ -54,6 +65,30 @@ let crlf =
 let single_quote =
   char '\'' *> return ()
   <|> fail "single quote expected"
+
+(** [version_header] parses version header. *)
+let version_header =
+  skip_str_ci "NATS/" *>
+  lift2 (fun major minor -> (int_of_string major, int_of_string minor))
+    (digits1 <* char '.')
+    digits1
+
+(** [header] parses a protocol message header. *)
+let header =
+  lift2 (fun name value -> (name, String.trim value))
+    (take_till (Char.equal ':') <* char ':')
+    (take_till P.is_cr)
+
+(** [headers] parses protocol message headers. *)
+let headers =
+  let open Headers in
+  lift2 (fun version headers -> { version; headers })
+    (version_header <* crlf)
+    (sep_by crlf header)
+
+(** [parse_headers str] parses [str] containing protocol message headers. *)
+let parse_headers str =
+  parse_string ~consume:Consume.All headers str
 
 (** [info] parses an "INFO" protocol message. *)
 let info =
@@ -94,11 +129,13 @@ let hmsg =
       | _ ->
         failwith "wrong number of args"
     in
-    lift2
-      (fun headers payload ->
-         ServerMessage.HMsg { subject; sid; reply; headers; payload })
-      (take (hdr_size - 4) <* crlf <* crlf)
-      (take (size - hdr_size) <* crlf)
+    take (hdr_size - 4) <* crlf <* crlf >>= fun headers ->
+    take (size - hdr_size) <* crlf >>= fun payload ->
+    match parse_headers headers with
+    | Ok headers ->
+      return (ServerMessage.HMsg { subject; sid; reply; headers; payload })
+    | Error _ ->
+      fail "invalid headers"
   with
   | Failure err -> fail err
 

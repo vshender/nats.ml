@@ -130,14 +130,19 @@ let msg_tests = "MSG", [
 
 (** Tests for the "HMSG" protocol message parsing. *)
 let hmsg_tests = "HMSG", [
-    "success" -: check_parser "successfully parsed"
-      "HMSG FOO.BAR 9 34 45\r\nNATS/1.0\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n"
+    "success" -: check_parser "HMSG: success"
+      "HMSG FOO.BAR 9 53 64\r\nNATS/1.0\r\nFoodGroup: vegetable\r\nFoodGroup: plants\r\n\r\nHello World\r\n"
       (Ok
          (ServerMessage.HMsg
             (HMsg.make
                ~subject:"FOO.BAR"
                ~sid:"9"
-               ~headers:"NATS/1.0\r\nFoodGroup: vegetable"
+               ~headers:(Headers.make
+                           ~headers:[
+                             ("FoodGroup", "vegetable");
+                             ("FoodGroup", "plants");
+                           ]
+                           ())
                ~payload:"Hello World"
                ()
             )));
@@ -148,7 +153,9 @@ let hmsg_tests = "HMSG", [
             (HMsg.make
                ~subject:"FOO.BAR"
                ~sid:"9"
-               ~headers:"NATS/1.0\r\nFoodGroup: vegetable"
+               ~headers:(Headers.make
+                           ~headers:[("FoodGroup", "vegetable")]
+                           ())
                ~payload:"Hello World"
                ()
             )));
@@ -160,7 +167,9 @@ let hmsg_tests = "HMSG", [
                ~subject:"FOO.BAR"
                ~sid:"9"
                ~reply:"BAZ.69"
-               ~headers:"NATS/1.0\r\nFoodGroup: vegetable"
+               ~headers:(Headers.make
+                           ~headers:[("FoodGroup", "vegetable")]
+                           ())
                ~payload:"Hello World"
                ()
             )));
@@ -191,6 +200,12 @@ let hmsg_tests = "HMSG", [
     "payload too long" -: check_parser "payload too long"
       "HMSG FOO.BAR 9 34 39\r\nNATS/1.0\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n"
       (Error "HMSG: CRLF expected");
+    "invalid headers" -: check_parser "HMSG: invalid headers"
+      "HMSG FOO.BAR 9 45 56\r\nNATS/1.0\r\nFoodGroup: vegetable\r\nFoodGroup\r\n\r\nHello World\r\n"
+      (Error "HMSG: invalid headers");
+    "invalid version" -: check_parser "HMSG: invalid version"
+      "HMSG FOO.BAR 9 BAZ.69 34 45\r\nNATS/x.y\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n"
+      (Error "HMSG: invalid headers");
   ]
 
 (** Tests for the "PING" protocol message parsing. *)

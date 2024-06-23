@@ -4,6 +4,40 @@
     for details.
 *)
 
+(** A module containing a type of NATS message headers and functions for
+    working with it. *)
+module Headers : sig
+  (** A type of NATS message headers.
+
+      See {{:https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-4.md}NATS Message Headers}
+      for details. *)
+  type t = {
+    version: int * int;               (** header version *)
+    headers: (string * string) list;  (** headers themselves *)
+  }
+
+  (** [make] is a constructor for the [Headers.t] records. *)
+  val make : ?version:int * int -> ?headers:(string * string) list -> unit -> t
+
+  (** [version headers] returns a header version. *)
+  val version : t -> int * int
+
+  (** [get key headers] returns a first value found matching [key] in a
+      case-sensitive lookup in [headers].
+
+      Returns [None] if a matching [key] is not found.  *)
+  val get : string -> t -> string option
+
+  (** [values key headers] returns a list of all values that case-sensitive
+      match [key] or an empty list. *)
+  val values : string -> t -> string list
+
+  (** [fold f headers init] computes [(f kN vN ... (f k2 v2 (f k1 v1 init)) ...)],
+      where [(k1, v1), ..., (kN, vN)] are the elements of [headers].  Each
+      header is presented exactly once to [f]. *)
+  val fold : (string -> string -> 'acc -> 'acc) -> t -> 'acc -> 'acc
+end
+
 module Info : sig
   (** A type of the INFO message argument. *)
   type t = {
@@ -191,7 +225,7 @@ module HPub : sig
   type t = {
     subject : string;         (** subject name *)
     reply   : string option;  (** reply subject *)
-    headers : string;         (** message headers *)
+    headers : Headers.t;      (** message headers *)
     payload : string;         (** message payload *)
   }
 
@@ -199,7 +233,7 @@ module HPub : sig
   val make :
     subject:string ->
     ?reply:string ->
-    headers:string ->
+    headers:Headers.t ->
     payload:string ->
     unit -> t
 end
@@ -261,7 +295,7 @@ module HMsg : sig
     subject : string;         (** subject name  *)
     reply   : string option;  (** subject name for reply *)
     sid     : string;         (** subscription ID *)
-    headers : string;         (** message headers *)
+    headers : Headers.t;      (** message headers *)
     payload : string;         (** message payload *)
   }
 
@@ -270,7 +304,7 @@ module HMsg : sig
     subject:string ->
     ?reply:string ->
     sid:string ->
-    headers:string ->
+    headers:Headers.t ->
     payload:string ->
     unit -> t
 end

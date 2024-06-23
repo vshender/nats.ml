@@ -1,3 +1,3 @@
 (tests
- (names test_parse)
+ (names test_headers test_parse)
  (libraries nats alcotest))

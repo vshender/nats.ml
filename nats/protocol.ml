@@ -1,5 +1,33 @@
 (** NATS client protocol messages. *)
 
+module Headers = struct
+  type t = {
+    version : int * int;
+    headers : (string * string) list;
+  }
+  [@@deriving eq, show { with_path = false }]
+
+  let make ?(version = (1, 0)) ?(headers = []) () =
+    { version; headers }
+
+  let version { version; _ } =
+    version
+
+  let get key { headers; _ } =
+    List.assoc_opt key headers
+
+  let values key { headers; _ } =
+    List.filter_map
+      (fun (k, v) -> if String.equal k key then Some v else None)
+      headers
+
+  let fold f { headers; _ } init =
+    List.fold_left
+      (fun acc (key, value) -> f key value acc)
+      init
+      headers
+end
+
 module Info = struct
   type t = {
     server_id       : string;
@@ -66,7 +94,7 @@ module HPub = struct
   type t = {
     subject : string;
     reply   : string option;
-    headers : string;
+    headers : Headers.t;
     payload : string;
   }
   [@@deriving eq, make, show { with_path = false }]
@@ -104,7 +132,7 @@ module HMsg = struct
     subject : string;
     reply   : string option;
     sid     : string;
-    headers : string;
+    headers : Headers.t;
     payload : string;
   }
   [@@deriving eq, make, show { with_path = false }]
