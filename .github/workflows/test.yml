@@ -1,0 +1,39 @@
+name: test
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+        ocaml-version:
+          - 5.2.x
+          - 5.1.x
+          - 5.0.x
+          - 4.14.x
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: setup OCaml ${{ matrix.ocaml-version }}
+        uses: avsm/setup-ocaml@v2
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-version }}
+
+      - name: deps
+        run: |
+          opam pin add --no-action nats .
+          opam install --with-test --deps-only .
+      - name: build
+        run: opam exec -- dune build
+
+      - name: test
+        run: opam exec -- dune runtest
