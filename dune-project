@@ -25,3 +25,12 @@
   (ppx_deriving (>= 6.0.2))
   (ppx_deriving_yojson (>= 3.8.0))
   (alcotest (and (>= 1.7.0) :with-test))))
+
+(package
+ (name nuid)
+ (synopsis
+  "A highly performant unique identifier generator")
+ (depends
+  (ocaml (>= 4.14.0))
+  (alcotest (and (>= 1.7.0) :with-test))
+  (benchmark (and (>= 1.6) :with-test))))

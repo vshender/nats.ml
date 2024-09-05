@@ -1,0 +1,4 @@
+(library
+ (name nuid)
+ (public_name nuid)
+ (libraries threads))
