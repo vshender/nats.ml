@@ -169,3 +169,38 @@ let server_message =
   | '+'           -> ok                      <?> "OK"
   | '-'           -> err                     <?> "ERR"
   | _             -> fail "unknown protocol" <?> "NATS"
+
+module Reader = struct
+  type t = Protocol.ServerMessage.t Buffered.state ref
+
+  type result =
+    | Message of Protocol.ServerMessage.t
+    | Need_input
+    | Parse_error of string list * string
+
+  let create ?initial_buffer_size () =
+    ref (Buffered.parse ?initial_buffer_size server_message)
+
+  let next_msg t =
+    match !t with
+    | Buffered.Partial _ ->
+      Need_input
+    | Buffered.Fail (_, marks, msg) ->
+      Parse_error (marks, msg)
+    | Buffered.Done (uc, result) ->
+      t := Buffered.parse server_message;
+      if uc.len > 0 then begin
+        let leftover = Bigstringaf.sub uc.buf ~off:uc.off ~len:uc.len in
+        t := Buffered.feed !t (`Bigstring leftover)
+      end;
+      Message result
+
+  let feed t bytes off len =
+    let input =
+      if len > 0 then
+        `String Bytes.(unsafe_to_string (sub bytes off len))
+      else
+        `Eof
+    in
+    t := Buffered.feed !t input
+end
