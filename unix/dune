@@ -1,0 +1,4 @@
+(library
+ (name nats_unix)
+ (public_name nats-unix)
+ (libraries nats unix uri))

@@ -27,6 +27,17 @@
   (alcotest (and (>= 1.7.0) :with-test))))
 
 (package
+ (name nats-unix)
+ (synopsis
+  "Unix library based client for NATS, the cloud native messaging system")
+ (depends
+  (ocaml (>= 4.14.0))
+  (nats (= :version))
+  (uri (>= 4.4.0))
+  (alcotest (and (>= 1.7.0) :with-test))
+  (benchmark (and (>= 1.6) :with-test))))
+
+(package
  (name nuid)
  (synopsis
   "A highly performant unique identifier generator")
