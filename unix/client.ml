@@ -1,5 +1,7 @@
 (** NATS client. *)
 
+open Compat
+
 open Unix
 
 open Nats.Parse

@@ -34,6 +34,7 @@
   (ocaml (>= 4.14.0))
   (nats (= :version))
   (uri (>= 4.4.0))
+  (cppo (>= 1.6.9))
   (alcotest (and (>= 1.7.0) :with-test))
   (benchmark (and (>= 1.6) :with-test))))
 
