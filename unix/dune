@@ -1,7 +1,7 @@
 (library
  (name nats_unix)
  (public_name nats-unix)
- (libraries unix uri nats)
+ (libraries threads unix uri nats)
  (preprocess
   (per_module
    ((action (run %{bin:cppo} -V OCAML:%{ocaml_version} %{input-file})) compat))))
