@@ -115,14 +115,26 @@ module Subscriptions = struct
   let iter f t =
     Hashtbl.iter f t.subs
 
-  let subscribe t subject group callback next_msg_start_cb next_msg_finish_cb =
-    t.ssid <- t.ssid + 1;
-    let sub = Subscription.create
-        ~next_msg_start_cb ~next_msg_finish_cb
-        t.ssid subject group callback
-    in
-    Hashtbl.add t.subs (Subscription.sid sub) sub;
-    sub
+  let subscribe
+      t subject group callback
+      unsubscribe_cb next_msg_start_cb next_msg_finish_cb
+    =
+    Mutex.protect t.mutex
+      begin fun () ->
+        t.ssid <- t.ssid + 1;
+        let sub = Subscription.create
+            ~unsubscribe_cb ~next_msg_start_cb ~next_msg_finish_cb
+            t.ssid subject group callback
+        in
+        Hashtbl.add t.subs (Subscription.sid sub) sub;
+        sub
+      end
+
+  let unsubscribe t sub =
+    Mutex.protect t.mutex
+      begin fun () ->
+        Hashtbl.remove t.subs (Subscription.sid sub)
+      end
 
   let handle_msg t msg =
     let sid = int_of_string msg.Msg.sid in
@@ -335,6 +347,13 @@ let connect
 
   conn
 
+let unsubscribe_cb c sub =
+  Subscriptions.unsubscribe c.subscriptions sub;
+  let unsub_msg = ClientMessage.UnSub
+      (UnSub.make ~sid:(string_of_int (Subscription.sid sub)) ())
+  in
+  send_msg c unsub_msg
+
 let next_msg_start_cb c sub timeout_time =
   CurrentSyncOperation.start
     c.cur_sync_op
@@ -350,6 +369,7 @@ let next_msg_finish_cb c sub =
 let subscribe c ?group ?callback subject =
   let sub = Subscriptions.subscribe
       c.subscriptions subject group callback
+      (unsubscribe_cb c)
       (next_msg_start_cb c)
       (next_msg_finish_cb c)
   in

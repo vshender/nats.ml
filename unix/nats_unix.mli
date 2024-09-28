@@ -9,10 +9,14 @@
       val nc : t = <abstr>
       # Client.publish nc "test" "Hello World" ;;
       - : unit = ()
-      # Client.subscribe nc ~callback:(fun msg -> Printf.printf "Message recieved: %s\n%!" msg.Msg.payload) "test" ;;
-      - : Subscription.t = <abstr>
+      # let sub = Client.subscribe nc ~callback:(fun msg -> Printf.printf "Message recieved: %s\n%!" msg.Msg.payload) "test" ;;
+      val sub : Subscription.t = <abstr>
       # Client.publish nc "test" "Hello World" ;;
       Message received: Hello World
+      - : unit = ()
+      # Subscription.unsubscribe sub ;;
+      - : unit = ()
+      # Client.publish nc "test" "Hello World" ;;
       - : unit = ()
       # let sub = Client.subscribe nc "test2" ;;
       val sub : Subscription.t = <abstr>
@@ -25,6 +29,10 @@
         payload = "Hello World"}
       # Subscription.next_msg ~timeout:2. sub ;;
       - : Msg.t option = None
+      # Subscription.unsubscribe sub ;;
+      - : unit = ()
+      # Subscription.next_msg ~timeout:2. sub ;;
+      Exception: Failure "subscription is closed".
       # Client.close nc ;;
       - : unit = ()
     ]}
@@ -35,5 +43,10 @@ module Client = Client
 module Subscription : sig
   type t = Subscription.t
 
+  val sid : t -> int
+  val subject : t -> string
+  val group : t -> string option
+  val is_sync : t -> bool
+  val unsubscribe : t -> unit
   val next_msg : ?timeout:float -> t -> Nats.Protocol.Msg.t option
 end

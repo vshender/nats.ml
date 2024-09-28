@@ -15,13 +15,14 @@ type message_delivery =
   | Queue    of message_queue
 
 type t = {
-  sid            : int;
-  subject        : string;
-  group          : string option;
-  delivery       : message_delivery;
+  sid                : int;
+  subject            : string;
+  group              : string option;
+  delivery           : message_delivery;
 
-  mutable closed : bool;
+  mutable closed     : bool;
 
+  unsubscribe_cb     : (t -> unit) option;
   next_msg_start_cb  : (t -> float option -> unit) option;
   next_msg_finish_cb : (t -> unit) option;
 }
@@ -32,8 +33,13 @@ let subject t = t.subject
 
 let group t = t.group
 
+let is_sync t =
+  match t.delivery with
+  | Callback _ -> false
+  | Queue _    -> true
+
 let create
-    ?next_msg_start_cb ?next_msg_finish_cb
+    ?unsubscribe_cb ?next_msg_start_cb ?next_msg_finish_cb
     sid subject group callback =
   let delivery = match callback with
     | Some cb -> Callback cb
@@ -48,12 +54,17 @@ let create
     group;
     delivery;
     closed = false;
+    unsubscribe_cb;
     next_msg_start_cb;
     next_msg_finish_cb;
   }
 
 let close t =
   t.closed <- true
+
+let unsubscribe t =
+  t.unsubscribe_cb |> Option.iter (fun cb -> cb t);
+  close t
 
 let signal_timeout t =
   match t.delivery with
