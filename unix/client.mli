@@ -17,11 +17,9 @@ val connect :
   ?error_cb:error_callback ->
   unit -> t
 
-(* val read_msg : ?timeout:float -> t -> ServerMessage.t option *)
-
 val send_msg : t -> Nats.Protocol.ClientMessage.t -> unit
 
-val subscribe : t -> ?group:string -> string -> callback -> unit
+val subscribe : t -> ?group:string -> ?callback:callback -> string -> Subscription.t
 
 val publish : t -> string -> string -> unit
 

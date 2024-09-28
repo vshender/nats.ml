@@ -12,7 +12,7 @@ let client_name    = "nats.ml-unix"
 let client_lang    = "ocaml"
 let client_version = "0.0.1-dev"
 
-type callback = Msg.t -> unit
+type callback = Subscription.callback
 type error_callback = exn -> unit
 
 (** A module to track the number of unacknowledged PINGs. *)
@@ -53,17 +53,98 @@ module PingPongTracker = struct
       end
 end
 
+module CurrentSyncOperation = struct
+  type cur_sync_op = {
+    id             : int;
+    timeout_time   : float option;
+    signal_timeout : unit -> unit;
+  }
+
+  type t = {
+    mutable cur_sync_op : cur_sync_op option;
+    mutex               : Mutex.t;
+  }
+
+  let create () = {
+    cur_sync_op = None;
+    mutex       = Mutex.create ();
+  }
+
+  let start t ~id ~timeout_time ~signal_timeout =
+    Mutex.protect t.mutex
+      begin fun () ->
+        match t.cur_sync_op with
+        | None   -> t.cur_sync_op <- Some { id; timeout_time; signal_timeout }
+        | Some _ -> failwith "another sync operation is running"
+      end
+
+  let finish t ~id =
+    Mutex.protect t.mutex
+      begin fun () ->
+        match t.cur_sync_op with
+        | Some { id = oid; _ } when id = oid ->
+          t.cur_sync_op <- None
+        | Some _ -> failwith "another sync operation is running"
+        | None   -> failwith "no sync operation is running"
+      end
+
+  let check_timeout t =
+    Mutex.protect t.mutex
+      begin fun () ->
+        match t.cur_sync_op with
+        | Some { timeout_time = Some ttime; signal_timeout; _ } ->
+          if gettimeofday () >= ttime then signal_timeout ()
+        | Some { timeout_time = None; _ } | None ->
+          ()
+      end
+end
+
+module Subscriptions = struct
+  type t = {
+    mutable ssid : int;
+    subs         : (int, Subscription.t) Hashtbl.t;
+    mutex        : Mutex.t;
+  }
+
+  let create () = {
+    ssid  = 0;
+    subs  = Hashtbl.create 32;
+    mutex = Mutex.create ();
+  }
+
+  let iter f t =
+    Hashtbl.iter f t.subs
+
+  let subscribe t subject group callback next_msg_start_cb next_msg_finish_cb =
+    t.ssid <- t.ssid + 1;
+    let sub = Subscription.create
+        ~next_msg_start_cb ~next_msg_finish_cb
+        t.ssid subject group callback
+    in
+    Hashtbl.add t.subs (Subscription.sid sub) sub;
+    sub
+
+  let handle_msg t msg =
+    let sid = int_of_string msg.Msg.sid in
+    let sub = Mutex.protect t.mutex
+        (fun () -> Hashtbl.find_opt t.subs sid)
+    in
+    match sub with
+    | Some sub -> Subscription.handle_msg sub msg
+    | None     -> ()
+end
+
 type t = {
   mutex             : Mutex.t;
   sock              : file_descr;
   in_buffer         : Bytes.t;
   reader            : Reader.t;
   serializer        : Faraday.t;
-  mutable ssid      : int;
-  subscriptions     : (int, callback) Hashtbl.t;
+  subscriptions     : Subscriptions.t;
   mutable running   : bool;
   mutable io_thread : Thread.t;
   ping_pongs        : PingPongTracker.t;
+  cur_sync_op       : CurrentSyncOperation.t;
   error_cb          : error_callback;
 }
 
@@ -153,7 +234,8 @@ let rec io_loop c =
             iovec
         end;
 
-        (* TODO: process timeout *)
+        (* Process timeout. *)
+        CurrentSyncOperation.check_timeout c.cur_sync_op;
 
         (* TODO: send pings *)
       with
@@ -164,16 +246,7 @@ let rec io_loop c =
 
 and dispatch_message c = function
   | ServerMessage.Msg msg ->
-    begin
-      (* Regular subscription *)
-      let sid = int_of_string msg.sid in
-      let callback = Mutex.protect c.mutex
-          (fun () -> Hashtbl.find_opt c.subscriptions sid)
-      in
-      match callback with
-      | Some cb -> cb msg
-      | None    -> ()
-    end
+    Subscriptions.handle_msg c.subscriptions msg
   | ServerMessage.Ping ->
     send_msg c ClientMessage.Pong
   | ServerMessage.Pong ->
@@ -224,11 +297,12 @@ let connect
     in_buffer        = Bytes.create 0x1000;
     reader           = Reader.create ();
     serializer       = Faraday.create 0x1000;
-    ssid             = 0;
-    subscriptions    = Hashtbl.create 32;
+    subscriptions    = Subscriptions.create ();
     running          = true;
     io_thread        = Thread.self ();
     ping_pongs       = PingPongTracker.create ();
+
+    cur_sync_op      = CurrentSyncOperation.create ();
 
     error_cb         = error_cb;
   } in
@@ -261,20 +335,33 @@ let connect
 
   conn
 
-let subscribe c ?group subject callback =
-  let sub =
-    Mutex.protect c.mutex
-      begin fun () ->
-        c.ssid <- c.ssid + 1;
-        Hashtbl.add c.subscriptions c.ssid callback;
-        ClientMessage.Sub
-          (Sub.make ~subject ?group ~sid:(string_of_int c.ssid) ())
-      end
-  in send_msg c sub
+let next_msg_start_cb c sub timeout_time =
+  CurrentSyncOperation.start
+    c.cur_sync_op
+    ~id:(Obj.magic sub)
+    ~timeout_time
+    ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
+
+let next_msg_finish_cb c sub =
+  CurrentSyncOperation.finish
+    c.cur_sync_op
+    ~id:(Obj.magic sub)
+
+let subscribe c ?group ?callback subject =
+  let sub = Subscriptions.subscribe
+      c.subscriptions subject group callback
+      (next_msg_start_cb c)
+      (next_msg_finish_cb c)
+  in
+  let sub_msg = ClientMessage.Sub
+      (Sub.make ~subject ?group ~sid:(string_of_int (Subscription.sid sub)) ())
+  in
+  send_msg c sub_msg;
+  sub
 
 let publish c subject payload =
-  let pub = ClientMessage.Pub (Pub.make ~subject ~payload ()) in
-  send_msg c pub
+  let pub_msg = ClientMessage.Pub (Pub.make ~subject ~payload ()) in
+  send_msg c pub_msg
 
 let flush c =
   send_msg c ClientMessage.Ping;
@@ -282,6 +369,7 @@ let flush c =
 
 let close c =
   c.running <- false;
+  Subscriptions.iter (fun _ -> Subscription.close) c.subscriptions;
   Thread.join c.io_thread;
   shutdown c.sock SHUTDOWN_ALL;
   close c.sock;
