@@ -112,8 +112,11 @@ module Subscriptions = struct
     mutex = Mutex.create ();
   }
 
-  let iter f t =
-    Hashtbl.iter f t.subs
+  let iter t f =
+    Mutex.protect t.mutex
+      begin fun () ->
+        Hashtbl.iter (fun _sid sub -> f sub) t.subs
+      end
 
   let subscribe
       t subject group callback
@@ -134,6 +137,12 @@ module Subscriptions = struct
     Mutex.protect t.mutex
       begin fun () ->
         Hashtbl.remove t.subs (Subscription.sid sub)
+      end
+
+  let unsubscribe_all t =
+    Mutex.protect t.mutex
+      begin fun () ->
+        Hashtbl.clear t.subs
       end
 
   let handle_msg t msg =
@@ -160,6 +169,42 @@ type t = {
   error_cb          : error_callback;
 }
 
+let is_running c =
+  c.running
+
+let is_closed c =
+  not c.running
+
+let send_msg c msg =
+  if is_closed c then
+    failwith "connection closed";
+
+  Mutex.protect c.mutex
+    begin fun () ->
+      serialize_client_message c.serializer msg
+    end
+
+let flush c =
+  if is_closed c then
+    failwith "connection closed";
+
+  send_msg c ClientMessage.Ping;
+  PingPongTracker.incr_and_wait c.ping_pongs
+
+let close c =
+  Mutex.protect c.mutex
+    begin fun () ->
+      c.running <- false;
+      Subscriptions.iter c.subscriptions Subscription.close;
+      Subscriptions.unsubscribe_all c.subscriptions;
+    end;
+  Thread.join c.io_thread;
+  shutdown c.sock SHUTDOWN_ALL;
+  Unix.close c.sock;
+  Faraday.close c.serializer;
+  ignore (Faraday.drain c.serializer);
+  ()
+
 let read_client_msg ?timeout c =
   let start_time = gettimeofday () in
   let time_remaining () =
@@ -179,8 +224,8 @@ let read_client_msg ?timeout c =
         c.in_buffer 0 (Bytes.length c.in_buffer)
       |> begin function
         | 0 ->
-          c.running <- false;
-          failwith "closed"
+          close c;
+          failwith "connection closed"
         | n ->
           Reader.feed c.reader c.in_buffer 0 n;
           loop ()
@@ -190,15 +235,11 @@ let read_client_msg ?timeout c =
   in
   loop ()
 
-let send_msg c msg =
-  Mutex.protect c.mutex
-    (fun () -> serialize_client_message c.serializer msg)
-
 let rec io_loop c =
   let select_timeout = 0.1 in
 
   try
-    while c.running do
+    while is_running c do
       try
         let (readable, writeable, _) = select [c.sock] [c.sock] [] select_timeout in
 
@@ -207,7 +248,7 @@ let rec io_loop c =
           match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
           | 0 ->
             c.error_cb (Failure "connection closed");
-            c.running <- false;
+            close c;
           | n ->
             let msg =  (* TODO: result instead of option *)
               Mutex.protect c.mutex
@@ -218,7 +259,7 @@ let rec io_loop c =
                   | Reader.Need_input  -> None
                   | Reader.Parse_error (_, msg) ->
                     c.error_cb (Failure msg);
-                    c.running <- false;
+                    close c;
                     None
                 end
             in Option.iter (dispatch_message c) msg
@@ -239,7 +280,7 @@ let rec io_loop c =
               match write_bigarray c.sock iovec.Faraday.buffer iovec.off iovec.len with
               | 0 ->
                 c.error_cb (Failure "connection failure");
-                c.running <- false;
+                close c
               | n ->
                 Mutex.protect c.mutex (fun () -> Faraday.shift c.serializer n)
             end
@@ -313,9 +354,7 @@ let connect
     running          = true;
     io_thread        = Thread.self ();
     ping_pongs       = PingPongTracker.create ();
-
     cur_sync_op      = CurrentSyncOperation.create ();
-
     error_cb         = error_cb;
   } in
 
@@ -348,11 +387,13 @@ let connect
   conn
 
 let unsubscribe_cb c sub =
-  Subscriptions.unsubscribe c.subscriptions sub;
+  if is_closed c then
+    failwith "connection closed";
   let unsub_msg = ClientMessage.UnSub
       (UnSub.make ~sid:(string_of_int (Subscription.sid sub)) ())
   in
-  send_msg c unsub_msg
+  send_msg c unsub_msg;
+  Subscriptions.unsubscribe c.subscriptions sub
 
 let next_msg_start_cb c sub timeout_time =
   CurrentSyncOperation.start
@@ -367,6 +408,8 @@ let next_msg_finish_cb c sub =
     ~id:(Obj.magic sub)
 
 let subscribe c ?group ?callback subject =
+  if is_closed c then
+    failwith "connection closed";
   let sub = Subscriptions.subscribe
       c.subscriptions subject group callback
       (unsubscribe_cb c)
@@ -380,19 +423,21 @@ let subscribe c ?group ?callback subject =
   sub
 
 let publish c subject payload =
+  if is_closed c then
+    failwith "connection closed";
   let pub_msg = ClientMessage.Pub (Pub.make ~subject ~payload ()) in
   send_msg c pub_msg
 
-let flush c =
-  send_msg c ClientMessage.Ping;
-  PingPongTracker.incr_and_wait c.ping_pongs
+let drain c =
+  if is_closed c then
+    failwith "connection closed";
 
-let close c =
-  c.running <- false;
-  Subscriptions.iter (fun _ -> Subscription.close) c.subscriptions;
-  Thread.join c.io_thread;
-  shutdown c.sock SHUTDOWN_ALL;
-  close c.sock;
-  Faraday.close c.serializer;
-  ignore (Faraday.drain c.serializer);
-  ()
+  Subscriptions.iter c.subscriptions
+    begin fun sub ->
+      let unsub_msg = ClientMessage.UnSub
+          (UnSub.make ~sid:(string_of_int (Subscription.sid sub)) ())
+      in
+      send_msg c unsub_msg
+    end;
+  flush c;
+  close c

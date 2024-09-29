@@ -19,9 +19,7 @@ type t = {
   subject            : string;
   group              : string option;
   delivery           : message_delivery;
-
   mutable closed     : bool;
-
   unsubscribe_cb     : (t -> unit) option;
   next_msg_start_cb  : (t -> float option -> unit) option;
   next_msg_finish_cb : (t -> unit) option;
@@ -103,13 +101,9 @@ let next_msg ?timeout t =
       | None              -> false
     in
 
-    t.next_msg_start_cb |> Option.iter
-      (fun cb -> cb t timeout_time);
-
+    t.next_msg_start_cb |> Option.iter (fun cb -> cb t timeout_time);
     Fun.protect
-      ~finally:(fun () ->
-          t.next_msg_finish_cb |> Option.iter
-            (fun cb -> cb t))
+      ~finally:(fun () -> t.next_msg_finish_cb |> Option.iter (fun cb -> cb t))
       begin fun () ->
         Mutex.protect q.mutex
           begin fun () ->

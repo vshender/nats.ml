@@ -26,3 +26,5 @@ val publish : t -> string -> string -> unit
 val flush : t -> unit
 
 val close : t -> unit
+
+val drain : t -> unit
