@@ -114,9 +114,7 @@ module Subscriptions = struct
 
   let iter t f =
     Mutex.protect t.mutex
-      begin fun () ->
-        Hashtbl.iter (fun _sid sub -> f sub) t.subs
-      end
+      (fun () -> Hashtbl.iter (fun _sid sub -> f sub) t.subs)
 
   let subscribe
       t subject group callback
@@ -135,15 +133,11 @@ module Subscriptions = struct
 
   let unsubscribe t sub =
     Mutex.protect t.mutex
-      begin fun () ->
-        Hashtbl.remove t.subs (Subscription.sid sub)
-      end
+      (fun () -> Hashtbl.remove t.subs (Subscription.sid sub))
 
   let unsubscribe_all t =
     Mutex.protect t.mutex
-      begin fun () ->
-        Hashtbl.clear t.subs
-      end
+      (fun () -> Hashtbl.clear t.subs)
 
   let handle_msg t msg =
     let sid = int_of_string msg.Msg.sid in
@@ -180,9 +174,7 @@ let send_msg c msg =
     failwith "connection closed";
 
   Mutex.protect c.mutex
-    begin fun () ->
-      serialize_client_message c.serializer msg
-    end
+    (fun () -> serialize_client_message c.serializer msg)
 
 let flush c =
   if is_closed c then
@@ -193,17 +185,8 @@ let flush c =
 
 let close c =
   Mutex.protect c.mutex
-    begin fun () ->
-      c.running <- false;
-      Subscriptions.iter c.subscriptions Subscription.close;
-      Subscriptions.unsubscribe_all c.subscriptions;
-    end;
-  Thread.join c.io_thread;
-  shutdown c.sock SHUTDOWN_ALL;
-  Unix.close c.sock;
-  Faraday.close c.serializer;
-  ignore (Faraday.drain c.serializer);
-  ()
+    (fun () -> c.running <- false);
+  Thread.join c.io_thread
 
 let read_client_msg ?timeout c =
   let start_time = gettimeofday () in
@@ -236,66 +219,86 @@ let read_client_msg ?timeout c =
   loop ()
 
 let rec io_loop c =
-  let select_timeout = 0.1 in
+  let exception Close in
+  let select_timeout = 0.05 in
 
   try
-    while is_running c do
-      try
-        let (readable, writeable, _) = select [c.sock] [c.sock] [] select_timeout in
-
-        (* Read incoming data *)
-        if List.length readable > 0 then begin
-          match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
-          | 0 ->
-            c.error_cb (Failure "connection closed");
-            close c;
-          | n ->
-            let msg =  (* TODO: result instead of option *)
+    Fun.protect
+      ~finally:begin fun () ->
+        Mutex.protect c.mutex
+          begin fun () ->
+            Subscriptions.iter c.subscriptions Subscription.close;
+            Subscriptions.unsubscribe_all c.subscriptions;
+            shutdown c.sock SHUTDOWN_ALL;
+            Unix.close c.sock;
+            Faraday.close c.serializer;
+            ignore (Faraday.drain c.serializer)
+          end
+      end
+      begin fun () ->
+        while is_running c do
+          (* Read incoming data *)
+          let (readable, _, _) = select [c.sock] [] [] select_timeout in
+          if List.length readable > 0 then begin
+            match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
+            | 0 ->
+              c.error_cb (Failure "connection closed");
+              raise Close
+            | n ->
               Mutex.protect c.mutex
-                begin fun () ->
-                  Reader.feed c.reader c.in_buffer 0 n;
-                  match Reader.next_msg c.reader with
-                  | Reader.Message msg -> Some msg
-                  | Reader.Need_input  -> None
-                  | Reader.Parse_error (_, msg) ->
-                    c.error_cb (Failure msg);
-                    close c;
-                    None
-                end
-            in Option.iter (dispatch_message c) msg
-        end;
+                (fun () -> Reader.feed c.reader c.in_buffer 0 n)
+          end;
 
-        (* Send outgoing data *)
-        if List.length writeable > 0 then begin
-          let iovec =
+          (* Send outgoing data *)
+          let (_, writeable, _) = select [] [c.sock] [] select_timeout in
+          if List.length writeable > 0 then begin
             Mutex.protect c.mutex
               begin fun () ->
                 match Faraday.operation c.serializer with
                 | `Writev (iovec :: _) -> Some iovec
                 | _                   -> None
               end
-          in
-          Option.iter
-            begin fun iovec ->
-              match write_bigarray c.sock iovec.Faraday.buffer iovec.off iovec.len with
-              | 0 ->
-                c.error_cb (Failure "connection failure");
-                close c
-              | n ->
-                Mutex.protect c.mutex (fun () -> Faraday.shift c.serializer n)
-            end
-            iovec
-        end;
+            |> Option.iter
+              begin fun iovec ->
+                match
+                  write_bigarray
+                    c.sock
+                    iovec.Faraday.buffer iovec.off iovec.len
+                with
+                | 0 ->
+                  c.error_cb (Failure "connection failure");
+                  raise Close
+                | n ->
+                  Mutex.protect c.mutex
+                    (fun () -> Faraday.shift c.serializer n)
+              end
+          end;
 
-        (* Process timeout. *)
-        CurrentSyncOperation.check_timeout c.cur_sync_op;
+          (* Process the current operation's timeout. *)
+          CurrentSyncOperation.check_timeout c.cur_sync_op;
 
-        (* TODO: send pings *)
-      with
-      | _ -> Thread.yield ()  (* TODO: ??? *)
-    done
-  with exn ->
-    Printf.eprintf "I/O thread execution: %s\n%!" (Printexc.to_string exn)
+          (* Process messages. *)
+          let rec msg_processing_loop () =
+            let next_msg = Mutex.protect c.mutex
+                (fun () -> Reader.next_msg c.reader)
+            in
+            match next_msg with
+            | Reader.Message msg ->
+              dispatch_message c msg;
+              msg_processing_loop ()
+            | Reader.Need_input ->
+              ()
+            | Reader.Parse_error (_, msg) ->
+              c.error_cb (Failure msg);
+              raise Close
+          in msg_processing_loop ();
+
+          (* TODO: send pings *)
+        done
+      end
+  with
+  | Close -> ()
+  | exn -> c.error_cb exn
 
 and dispatch_message c = function
   | ServerMessage.Msg msg ->
