@@ -1,6 +1,4 @@
-open Nats.Protocol
-
-type callback = Msg.t -> unit
+type callback = Message.t -> unit
 
 type t
 
@@ -24,6 +22,6 @@ val unsubscribe : t -> unit
 
 val signal_timeout : t -> unit
 
-val handle_msg : t -> Msg.t -> unit
+val handle_msg : t -> Message.t -> unit
 
-val next_msg : ?timeout:float -> t -> Msg.t option
+val next_msg : ?timeout:float -> t -> Message.t option

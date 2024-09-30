@@ -1,11 +1,9 @@
 open Compat
 
-open Nats.Protocol
-
-type callback = Msg.t -> unit
+type callback = Message.t -> unit
 
 type message_queue = {
-  messages  : Msg.t Queue.t;
+  messages  : Message.t Queue.t;
   mutex     : Mutex.t;
   condition : Condition.t;
 }

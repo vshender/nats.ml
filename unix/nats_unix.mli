@@ -4,12 +4,11 @@
 
     {[
       # open Nats_unix ;;
-      # open Nats.Protocol ;;
       # let nc = Client.connect () ;;
       val nc : t = <abstr>
       # Client.publish nc "test" "Hello World" ;;
       - : unit = ()
-      # let sub = Client.subscribe nc ~callback:(fun msg -> Printf.printf "Message recieved: %s\n%!" msg.Msg.payload) "test" ;;
+      # let sub = Client.subscribe nc "test" ~callback:(fun msg -> Printf.printf "Message recieved: %s\n%!" msg.payload) ;;
       val sub : Subscription.t = <abstr>
       # Client.publish nc "test" "Hello World" ;;
       Message received: Hello World
@@ -38,6 +37,10 @@
     ]}
 *)
 
+module Headers = Message.Headers
+
+module Message = Message
+
 module Client = Client
 
 module Subscription : sig
@@ -48,5 +51,5 @@ module Subscription : sig
   val group : t -> string option
   val is_sync : t -> bool
   val unsubscribe : t -> unit
-  val next_msg : ?timeout:float -> t -> Nats.Protocol.Msg.t option
+  val next_msg : ?timeout:float -> t -> Message.t option
 end

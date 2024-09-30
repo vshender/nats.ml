@@ -1,10 +1,8 @@
 (** NATS client. *)
 
-open Nats.Protocol
-
 type t
 
-type callback = Msg.t -> unit
+type callback = Message.t -> unit
 type error_callback = exn -> unit
 
 val connect :

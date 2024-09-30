@@ -140,9 +140,8 @@ module Subscriptions = struct
       (fun () -> Hashtbl.clear t.subs)
 
   let handle_msg t msg =
-    let sid = int_of_string msg.Msg.sid in
     let sub = Mutex.protect t.mutex
-        (fun () -> Hashtbl.find_opt t.subs sid)
+        (fun () -> Hashtbl.find_opt t.subs msg.Message.sid)
     in
     match sub with
     | Some sub -> Subscription.handle_msg sub msg
@@ -302,7 +301,13 @@ let rec io_loop c =
 
 and dispatch_message c = function
   | ServerMessage.Msg msg ->
-    Subscriptions.handle_msg c.subscriptions msg
+    Subscriptions.handle_msg c.subscriptions {
+      subject = msg.Msg.subject;
+      reply   = msg.Msg.reply;
+      sid     = int_of_string msg.Msg.sid;
+      headers = None;
+      payload = msg.Msg.payload;
+    }
   | ServerMessage.Ping ->
     send_msg c ClientMessage.Pong
   | ServerMessage.Pong ->

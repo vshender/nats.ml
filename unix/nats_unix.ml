@@ -1,5 +1,9 @@
 (** Simple synchronous NATS client. *)
 
+module Headers = Message.Headers
+
+module Message = Message
+
 module Client = Client
 
 module Subscription = Subscription
