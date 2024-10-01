@@ -435,10 +435,10 @@ let subscribe c ?group ?callback subject =
   send_msg c sub_msg;
   sub
 
-let publish c subject payload =
+let publish c ?reply subject payload =
   if is_closed c then
     failwith "connection closed";
-  let pub_msg = ClientMessage.Pub (Pub.make ~subject ~payload ()) in
+  let pub_msg = ClientMessage.Pub (Pub.make ~subject ?reply ~payload ()) in
   send_msg c pub_msg
 
 let drain c =

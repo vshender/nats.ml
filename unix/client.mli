@@ -19,7 +19,7 @@ val send_msg : t -> Nats.Protocol.ClientMessage.t -> unit
 
 val subscribe : t -> ?group:string -> ?callback:callback -> string -> Subscription.t
 
-val publish : t -> string -> string -> unit
+val publish : t -> ?reply:string -> string -> string -> unit
 
 val flush : t -> unit
 
