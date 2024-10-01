@@ -13,14 +13,17 @@ type message_delivery =
   | Queue    of message_queue
 
 type t = {
-  sid                : int;
-  subject            : string;
-  group              : string option;
-  delivery           : message_delivery;
-  mutable closed     : bool;
-  unsubscribe_cb     : (t -> unit) option;
-  next_msg_start_cb  : (t -> float option -> unit) option;
-  next_msg_finish_cb : (t -> unit) option;
+  sid                    : int;
+  subject                : string;
+  group                  : string option;
+  delivery               : message_delivery;
+  mutable closed         : bool;
+  mutable delivered      : int;
+  mutable max_msgs       : int option;
+  unsubscribe_cb         : (t -> unit) option;
+  remove_subscription_cb : (t -> unit) option;
+  next_msg_start_cb      : (t -> float option -> unit) option;
+  next_msg_finish_cb     : (t -> unit) option;
 }
 
 let sid t = t.sid
@@ -29,13 +32,21 @@ let subject t = t.subject
 
 let group t = t.group
 
+let delivered t = t.delivered
+
+let max_msgs t = t.max_msgs
+
 let is_sync t =
   match t.delivery with
   | Callback _ -> false
   | Queue _    -> true
 
+let is_closed t =
+  t.closed
+
 let create
-    ?unsubscribe_cb ?next_msg_start_cb ?next_msg_finish_cb
+    ?unsubscribe_cb ?remove_subscription_cb
+    ?next_msg_start_cb ?next_msg_finish_cb
     sid subject group callback =
   let delivery = match callback with
     | Some cb -> Callback cb
@@ -49,8 +60,11 @@ let create
     subject;
     group;
     delivery;
-    closed = false;
+    closed    = false;
+    delivered = 0;
+    max_msgs  = None;
     unsubscribe_cb;
+    remove_subscription_cb;
     next_msg_start_cb;
     next_msg_finish_cb;
   }
@@ -58,9 +72,13 @@ let create
 let close t =
   t.closed <- true
 
-let unsubscribe t =
+let unsubscribe ?max_msgs t =
+  t.max_msgs <- max_msgs;
   t.unsubscribe_cb |> Option.iter (fun cb -> cb t);
-  close t
+  if Option.(is_none max_msgs || t.delivered >= get max_msgs) then begin
+    t.remove_subscription_cb |> Option.iter (fun cb -> cb t);
+    close t
+  end
 
 let signal_timeout t =
   match t.delivery with
@@ -71,15 +89,24 @@ let signal_timeout t =
       (fun () -> Condition.signal q.condition)
 
 let handle_msg t msg =
-  match t.delivery with
-  | Callback cb -> cb msg
-  | Queue q     ->
-    Mutex.protect q.mutex
-      begin fun () ->
-        Queue.add msg q.messages;
-        if Queue.length q.messages = 1 then
-          Condition.signal q.condition
+  begin match t.delivery with
+    | Callback cb -> cb msg
+    | Queue q     ->
+      Mutex.protect q.mutex
+        begin fun () ->
+          Queue.add msg q.messages;
+          if Queue.length q.messages = 1 then
+            Condition.signal q.condition
+        end
+  end;
+  t.delivered <- t.delivered + 1;
+  t.max_msgs |> Option.iter
+    begin fun max_msgs ->
+      if t.delivered >= max_msgs then begin
+        t.remove_subscription_cb |> Option.iter (fun cb -> cb t);
+        close t
       end
+    end
 
 let next_msg ?timeout t =
   match t.delivery with

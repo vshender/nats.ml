@@ -49,7 +49,9 @@ module Subscription : sig
   val sid : t -> int
   val subject : t -> string
   val group : t -> string option
+  val delivered : t -> int
   val is_sync : t -> bool
-  val unsubscribe : t -> unit
+  val is_closed : t -> bool
+  val unsubscribe : ?max_msgs:int -> t -> unit
   val next_msg : ?timeout:float -> t -> Message.t option
 end

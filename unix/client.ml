@@ -118,13 +118,15 @@ module Subscriptions = struct
 
   let subscribe
       t subject group callback
-      unsubscribe_cb next_msg_start_cb next_msg_finish_cb
+      unsubscribe_cb remove_subscription_cb
+      next_msg_start_cb next_msg_finish_cb
     =
     Mutex.protect t.mutex
       begin fun () ->
         t.ssid <- t.ssid + 1;
         let sub = Subscription.create
-            ~unsubscribe_cb ~next_msg_start_cb ~next_msg_finish_cb
+            ~unsubscribe_cb ~remove_subscription_cb
+            ~next_msg_start_cb ~next_msg_finish_cb
             t.ssid subject group callback
         in
         Hashtbl.add t.subs (Subscription.sid sub) sub;
@@ -398,10 +400,12 @@ let unsubscribe_cb c sub =
   if is_closed c then
     failwith "connection closed";
   let unsub_msg = ClientMessage.UnSub
-      (UnSub.make ~sid:(string_of_int (Subscription.sid sub)) ())
+      (UnSub.make
+         ~sid:(string_of_int (Subscription.sid sub))
+         ?max_msgs:(Subscription.max_msgs sub)
+         ())
   in
-  send_msg c unsub_msg;
-  Subscriptions.unsubscribe c.subscriptions sub
+  send_msg c unsub_msg
 
 let next_msg_start_cb c sub timeout_time =
   CurrentSyncOperation.start
@@ -421,6 +425,7 @@ let subscribe c ?group ?callback subject =
   let sub = Subscriptions.subscribe
       c.subscriptions subject group callback
       (unsubscribe_cb c)
+      (Subscriptions.unsubscribe c.subscriptions)
       (next_msg_start_cb c)
       (next_msg_finish_cb c)
   in
