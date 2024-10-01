@@ -245,8 +245,22 @@ let rec io_loop c =
       end
       begin fun () ->
         while is_running c do
+          let iovec = Mutex.protect c.mutex
+              begin fun () ->
+                match Faraday.operation c.serializer with
+                | `Writev (iovec :: _) -> Some iovec
+                | _                   -> None
+              end
+          in
+
+          let (readable, writeable, _) = select
+              [c.sock]
+              (if Option.is_some iovec then [c.sock] else [])
+              []
+              select_timeout
+          in
+
           (* Read incoming data *)
-          let (readable, _, _) = select [c.sock] [] [] select_timeout in
           if List.length readable > 0 then begin
             match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
             | 0 ->
@@ -258,15 +272,8 @@ let rec io_loop c =
           end;
 
           (* Send outgoing data *)
-          let (_, writeable, _) = select [] [c.sock] [] select_timeout in
-          if List.length writeable > 0 then begin
-            Mutex.protect c.mutex
-              begin fun () ->
-                match Faraday.operation c.serializer with
-                | `Writev (iovec :: _) -> Some iovec
-                | _                   -> None
-              end
-            |> Option.iter
+          if List.length writeable > 0 then
+            iovec |> Option.iter
               begin fun iovec ->
                 match
                   write_bigarray
@@ -279,8 +286,7 @@ let rec io_loop c =
                 | n ->
                   Mutex.protect c.mutex
                     (fun () -> Faraday.shift c.serializer n)
-              end
-          end;
+              end;
 
           (* Process the current operation's timeout. *)
           CurrentSyncOperation.check_timeout c.cur_sync_op;
