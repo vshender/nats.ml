@@ -13,7 +13,10 @@ val connect :
   ?connect_timeout:float ->
   ?keepalive:bool ->
   ?error_cb:error_callback ->
+  ?inbox_prefix:string ->
   unit -> t
+
+val new_inbox : t -> string
 
 val send_msg : t -> Nats.Protocol.ClientMessage.t -> unit
 

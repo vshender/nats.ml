@@ -12,6 +12,8 @@ let client_name    = "nats.ml-unix"
 let client_lang    = "ocaml"
 let client_version = "0.0.1-dev"
 
+let default_inbox_prefix = "_INBOX"
+
 type callback = Subscription.callback
 type error_callback = exn -> unit
 
@@ -162,7 +164,12 @@ type t = {
   ping_pongs        : PingPongTracker.t;
   cur_sync_op       : CurrentSyncOperation.t;
   error_cb          : error_callback;
+  inbox_prefix      : string;
+  nuid              : Nuid.State.t;
 }
+
+let new_inbox c =
+  Printf.sprintf "%s.%s" c.inbox_prefix (Nuid.State.next c.nuid)
 
 let is_running c =
   c.running
@@ -334,6 +341,7 @@ let connect
     ?connect_timeout
     ?(keepalive = false)  (* ??? *)
     ?(error_cb = default_error_callback)
+    ?(inbox_prefix = default_inbox_prefix)
     () =
   let uri = Uri.of_string url in
   let hostname = Uri.host uri |> Option.value ~default:"127.0.0.1"
@@ -366,6 +374,8 @@ let connect
     ping_pongs       = PingPongTracker.create ();
     cur_sync_op      = CurrentSyncOperation.create ();
     error_cb         = error_cb;
+    inbox_prefix;
+    nuid             = Nuid.State.create ();
   } in
 
   let info = read_client_msg ?timeout:(time_remaining ()) conn in
