@@ -1,4 +1,4 @@
-(** NATS client. *)
+(** A NATS client module. *)
 
 open Compat
 

@@ -1,3 +1,5 @@
+(** A module representing a message in the NATS protocol. *)
+
 module Headers = Nats.Protocol.Headers
 
 type t = {

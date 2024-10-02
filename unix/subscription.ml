@@ -1,3 +1,5 @@
+(** A module representing NATS subscription. *)
+
 open Compat
 
 type callback = Message.t -> unit
@@ -32,10 +34,6 @@ let subject t = t.subject
 
 let group t = t.group
 
-let delivered t = t.delivered
-
-let max_msgs t = t.max_msgs
-
 let is_sync t =
   match t.delivery with
   | Callback _ -> false
@@ -43,6 +41,10 @@ let is_sync t =
 
 let is_closed t =
   t.closed
+
+let delivered t = t.delivered
+
+let max_msgs t = t.max_msgs
 
 let create
     ?unsubscribe_cb ?remove_subscription_cb

@@ -1,4 +1,4 @@
-(** Simple synchronous NATS client. *)
+(** A [Unix] library based client for NATS. *)
 
 module Headers = Message.Headers
 
