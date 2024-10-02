@@ -24,6 +24,8 @@ val subscribe : t -> ?group:string -> ?callback:callback -> string -> Subscripti
 
 val publish : t -> ?reply:string -> string -> string -> unit
 
+val request : t -> ?timeout:float -> string -> string -> Message.t option
+
 val flush : t -> unit
 
 val close : t -> unit

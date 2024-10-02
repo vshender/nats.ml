@@ -152,20 +152,58 @@ module Subscriptions = struct
     | None     -> ()
 end
 
+module PendingRequest = struct
+  type result =
+    | Response of Message.t
+    | TimeOut
+
+  type t = {
+    inbox          : string;
+    mutable result : result option;
+    mutex          : Mutex.t;
+    condition      : Condition.t;
+  }
+
+  let create inbox = {
+    inbox;
+    result    = None;
+    mutex     = Mutex.create ();
+    condition = Condition.create ();
+  }
+
+  let wait t =
+    Mutex.protect t.mutex
+      begin fun () ->
+        while Option.is_none t.result do
+          Condition.wait t.condition t.mutex
+        done;
+        Option.get t.result
+      end
+
+  let resolve t result =
+    Mutex.protect t.mutex
+      begin fun () ->
+        t.result <- Some result;
+        Condition.signal t.condition
+      end
+end
+
 type t = {
-  mutex             : Mutex.t;
-  sock              : file_descr;
-  in_buffer         : Bytes.t;
-  reader            : Reader.t;
-  serializer        : Faraday.t;
-  subscriptions     : Subscriptions.t;
-  mutable running   : bool;
-  mutable io_thread : Thread.t;
-  ping_pongs        : PingPongTracker.t;
-  cur_sync_op       : CurrentSyncOperation.t;
-  error_cb          : error_callback;
-  inbox_prefix      : string;
-  nuid              : Nuid.State.t;
+  mutex               : Mutex.t;
+  sock                : file_descr;
+  in_buffer           : Bytes.t;
+  reader              : Reader.t;
+  serializer          : Faraday.t;
+  subscriptions       : Subscriptions.t;
+  resp_sub_prefix     : string;
+  mutable cur_request : PendingRequest.t option;
+  mutable running     : bool;
+  mutable io_thread   : Thread.t;
+  ping_pongs          : PingPongTracker.t;
+  cur_sync_op         : CurrentSyncOperation.t;
+  error_cb            : error_callback;
+  inbox_prefix        : string;
+  nuid                : Nuid.State.t;
 }
 
 let new_inbox c =
@@ -339,6 +377,97 @@ let default_error_callback exn =
     Stdlib.stderr
     "NATS: encoutered error %s\n%!" (Printexc.to_string exn)
 
+let unsubscribe_cb c sub =
+  if is_closed c then
+    failwith "connection closed";
+  let unsub_msg = ClientMessage.UnSub
+      (UnSub.make
+         ~sid:(string_of_int (Subscription.sid sub))
+         ?max_msgs:(Subscription.max_msgs sub)
+         ())
+  in
+  send_msg c unsub_msg
+
+let next_msg_start_cb c sub timeout_time =
+  CurrentSyncOperation.start
+    c.cur_sync_op
+    ~id:(Thread.id @@ Thread.self ())
+    ~timeout_time
+    ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
+
+let next_msg_finish_cb c _sub =
+  CurrentSyncOperation.finish
+    c.cur_sync_op
+    ~id:(Thread.id @@ Thread.self ())
+
+let subscribe c ?group ?callback subject =
+  if is_closed c then
+    failwith "connection closed";
+  let sub = Subscriptions.subscribe
+      c.subscriptions subject group callback
+      (unsubscribe_cb c)
+      (Subscriptions.unsubscribe c.subscriptions)
+      (next_msg_start_cb c)
+      (next_msg_finish_cb c)
+  in
+  let sub_msg = ClientMessage.Sub
+      (Sub.make ~subject ?group ~sid:(string_of_int (Subscription.sid sub)) ())
+  in
+  send_msg c sub_msg;
+  sub
+
+let publish c ?reply subject payload =
+  if is_closed c then
+    failwith "connection closed";
+  let pub_msg = ClientMessage.Pub (Pub.make ~subject ?reply ~payload ()) in
+  send_msg c pub_msg
+
+let request c ?timeout subject payload =
+  if is_closed c then
+    failwith "connection closed";
+
+  let timeout_time =
+    timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
+  let resp_subject = c.resp_sub_prefix ^ (Nuid.State.next c.nuid) in
+  let req = PendingRequest.create resp_subject in
+  Mutex.protect c.mutex
+    begin fun () ->
+      CurrentSyncOperation.start
+        c.cur_sync_op
+        ~id:(Thread.id @@ Thread.self ())
+        ~timeout_time
+        ~signal_timeout:(fun () -> PendingRequest.(resolve req TimeOut));
+      c.cur_request <- Some req
+    end;
+  Fun.protect
+    ~finally:begin fun () ->
+      Mutex.protect c.mutex
+        (fun () -> CurrentSyncOperation.finish
+            c.cur_sync_op
+            ~id:(Thread.id @@ Thread.self ()))
+    end
+    begin fun () ->
+      publish c ~reply:resp_subject subject payload;
+
+      match PendingRequest.wait req with
+      | Response msg -> Some msg
+      | TimeOut      -> None
+    end
+
+let drain c =
+  if is_closed c then
+    failwith "connection closed";
+
+  Subscriptions.iter c.subscriptions
+    begin fun sub ->
+      let unsub_msg = ClientMessage.UnSub
+          (UnSub.make ~sid:(string_of_int (Subscription.sid sub)) ())
+      in
+      send_msg c unsub_msg
+    end;
+  flush c;
+  close c
+
 let connect
     ?(url = "nats://127.0.0.1:4222")
     ?(name = client_name)
@@ -368,6 +497,8 @@ let connect
   let addr = ADDR_INET (inet_addr_of_string hostname, port) in
   Socket.connect ?timeout:(time_remaining ()) sock addr;
 
+  let nuid = Nuid.State.create () in
+
   let conn = {
     mutex            = Mutex.create ();
     sock;
@@ -375,13 +506,15 @@ let connect
     reader           = Reader.create ();
     serializer       = Faraday.create 0x1000;
     subscriptions    = Subscriptions.create ();
+    resp_sub_prefix  = Printf.sprintf "%s.%s." inbox_prefix (Nuid.State.next nuid);
+    cur_request      = None;
     running          = true;
     io_thread        = Thread.self ();
     ping_pongs       = PingPongTracker.create ();
     cur_sync_op      = CurrentSyncOperation.create ();
     error_cb         = error_cb;
     inbox_prefix;
-    nuid             = Nuid.State.create ();
+    nuid;
   } in
 
   let info = read_client_msg ?timeout:(time_remaining ()) conn in
@@ -408,65 +541,21 @@ let connect
   in
   send_msg conn connect;
 
+  let _ = subscribe conn (conn.resp_sub_prefix ^ "*")
+      ~callback:begin fun msg ->
+        Mutex.protect conn.mutex
+          begin fun () ->
+            let req = conn.cur_request in
+            match req with
+            | Some req ->
+              if msg.subject = req.inbox then
+                PendingRequest.(resolve req (Response msg))
+            | None ->
+              ()
+          end
+      end
+  in
+
   conn.io_thread <- Thread.create io_loop conn;
 
   conn
-
-let unsubscribe_cb c sub =
-  if is_closed c then
-    failwith "connection closed";
-  let unsub_msg = ClientMessage.UnSub
-      (UnSub.make
-         ~sid:(string_of_int (Subscription.sid sub))
-         ?max_msgs:(Subscription.max_msgs sub)
-         ())
-  in
-  send_msg c unsub_msg
-
-let next_msg_start_cb c sub timeout_time =
-  CurrentSyncOperation.start
-    c.cur_sync_op
-    ~id:(Obj.magic sub)
-    ~timeout_time
-    ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
-
-let next_msg_finish_cb c sub =
-  CurrentSyncOperation.finish
-    c.cur_sync_op
-    ~id:(Obj.magic sub)
-
-let subscribe c ?group ?callback subject =
-  if is_closed c then
-    failwith "connection closed";
-  let sub = Subscriptions.subscribe
-      c.subscriptions subject group callback
-      (unsubscribe_cb c)
-      (Subscriptions.unsubscribe c.subscriptions)
-      (next_msg_start_cb c)
-      (next_msg_finish_cb c)
-  in
-  let sub_msg = ClientMessage.Sub
-      (Sub.make ~subject ?group ~sid:(string_of_int (Subscription.sid sub)) ())
-  in
-  send_msg c sub_msg;
-  sub
-
-let publish c ?reply subject payload =
-  if is_closed c then
-    failwith "connection closed";
-  let pub_msg = ClientMessage.Pub (Pub.make ~subject ?reply ~payload ()) in
-  send_msg c pub_msg
-
-let drain c =
-  if is_closed c then
-    failwith "connection closed";
-
-  Subscriptions.iter c.subscriptions
-    begin fun sub ->
-      let unsub_msg = ClientMessage.UnSub
-          (UnSub.make ~sid:(string_of_int (Subscription.sid sub)) ())
-      in
-      send_msg c unsub_msg
-    end;
-  flush c;
-  close c
