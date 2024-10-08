@@ -95,7 +95,7 @@ end
 
 module CurrentSyncOperation = struct
   type cur_sync_op = {
-    id             : int;
+    thread_id      : int;
     timeout_time   : float option;
     signal_timeout : unit -> unit;
   }
@@ -110,19 +110,24 @@ module CurrentSyncOperation = struct
     mutex       = Mutex.create ();
   }
 
-  let start t ~id ~timeout_time ~signal_timeout =
+  let start t ~timeout_time ~signal_timeout =
     Mutex.protect t.mutex
       begin fun () ->
         match t.cur_sync_op with
-        | None   -> t.cur_sync_op <- Some { id; timeout_time; signal_timeout }
+        | None ->
+          t.cur_sync_op <- Some {
+              thread_id = Thread.id @@ Thread.self ();
+              timeout_time;
+              signal_timeout
+            }
         | Some _ -> failwith "another sync operation is running"
       end
 
-  let finish t ~id =
+  let finish t =
     Mutex.protect t.mutex
       begin fun () ->
         match t.cur_sync_op with
-        | Some { id = oid; _ } when id = oid ->
+        | Some { thread_id = tid; _ } when tid = Thread.id @@ Thread.self () ->
           t.cur_sync_op <- None
         | Some _ -> failwith "another sync operation is running"
         | None   -> failwith "no sync operation is running"
@@ -272,7 +277,6 @@ let flush ?timeout c =
     begin fun () ->
       CurrentSyncOperation.start
         c.cur_sync_op
-        ~id:(Thread.id @@ Thread.self ())
         ~timeout_time:timeout_time
         ~signal_timeout:(fun () ->
             PingPongTracker.resolve ping PingPongTracker.TimedOut);
@@ -281,11 +285,7 @@ let flush ?timeout c =
   Fun.protect
     ~finally:begin fun () ->
       Mutex.protect c.mutex
-        begin fun () ->
-          CurrentSyncOperation.finish
-            c.cur_sync_op
-            ~id:(Thread.id @@ Thread.self ())
-        end
+        (fun () -> CurrentSyncOperation.finish c.cur_sync_op)
     end
     begin fun () ->
       send_msg c ClientMessage.Ping;
@@ -457,14 +457,12 @@ let unsubscribe_cb c sub =
 let next_msg_start_cb c sub timeout_time =
   CurrentSyncOperation.start
     c.cur_sync_op
-    ~id:(Thread.id @@ Thread.self ())
     ~timeout_time
     ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
 
 let next_msg_finish_cb c _sub =
-  CurrentSyncOperation.finish
-    c.cur_sync_op
-    ~id:(Thread.id @@ Thread.self ())
+  CurrentSyncOperation.finish c.cur_sync_op
+
 
 let subscribe c ?group ?callback subject =
   if is_closed c then
@@ -500,7 +498,6 @@ let request c ?timeout subject payload =
     begin fun () ->
       CurrentSyncOperation.start
         c.cur_sync_op
-        ~id:(Thread.id @@ Thread.self ())
         ~timeout_time
         ~signal_timeout:(fun () -> PendingRequest.(resolve req TimeOut));
       c.cur_request <- Some req
@@ -508,9 +505,7 @@ let request c ?timeout subject payload =
   Fun.protect
     ~finally:begin fun () ->
       Mutex.protect c.mutex
-        (fun () -> CurrentSyncOperation.finish
-            c.cur_sync_op
-            ~id:(Thread.id @@ Thread.self ()))
+        (fun () -> CurrentSyncOperation.finish c.cur_sync_op)
     end
     begin fun () ->
       publish c ~reply:resp_subject subject payload;
