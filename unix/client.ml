@@ -19,39 +19,43 @@ type error_callback = exn -> unit
 
 (** A module to track the number of unacknowledged PINGs. *)
 module PingPongTracker = struct
-  (** The type representing the state of unacknowledged PINGs. *)
+  (** The type used to track individual PINGs. *)
+  type ping = Semaphore.Binary.t
+
+  (** The type representing PING-PONG trackers. *)
   type t = {
-    mutable counter : int;
-    mutex           : Mutex.t;
-    condition       : Condition.t;
+    pings : ping Queue.t;  (** A queue to hold unacknowledged PINGs. *)
+    mutex : Mutex.t;       (** A mutex to protect access to the PINGs queue. *)
   }
 
-  (** [create ()] initializes a new tracker for unacknowledged PINGs. *)
+  (** [create ()] creates a new PING-PONG tracker. *)
   let create () = {
-    counter   = 0;
-    mutex     = Mutex.create ();
-    condition = Condition.create ();
+    pings = Queue.create ();
+    mutex = Mutex.create ();
   }
 
-  (** [incr_and_wait t] increments the PING counter and waits until all PONGs
-      are received. *)
-  let incr_and_wait t =
+  (** [ping t] creates a new unacknowledged PING and adds it to the PINGs
+      queue of the tracker [t].  Returns a semaphore that will be "released"
+      when the corresponding PONG is received. *)
+  let ping t =
+    let ping = Semaphore.Binary.make false in
     Mutex.protect t.mutex
-      begin fun () ->
-        t.counter <- t.counter + 1;
-        while t.counter > 0 do
-          Condition.wait t.condition t.mutex
-        done
-      end
+      (fun () -> Queue.add ping t.pings);
+    ping
 
-  (** [decr t] decrements the PING counter and signals when all PONGs are
-      received. *)
-  let decr t =
+  (** [ping_and_wait t] adds a new unacknowledged PING to the PINGs queue of
+      the tracker [t] and blocks until the corresponding PONG is received. *)
+  let ping_and_wait t =
+    ping t |> Semaphore.Binary.acquire
+
+  (** [pong t] removes the first unacknowledged PING from the PINGs queue of
+      the tracker [t] and acknowledges it. *)
+  let pong t =
     Mutex.protect t.mutex
       begin fun () ->
-        t.counter <- t.counter - 1;
-        if t.counter = 0 then
-          Condition.signal t.condition
+        match Queue.take_opt t.pings with
+        | Some ping -> Semaphore.Binary.release ping
+        | None      -> assert false
       end
 end
 
@@ -227,7 +231,8 @@ let flush c =
     failwith "connection closed";
 
   send_msg c ClientMessage.Ping;
-  PingPongTracker.incr_and_wait c.ping_pongs
+  (* PingPongTracker.incr_and_wait c.ping_pongs *)
+  PingPongTracker.ping_and_wait c.ping_pongs
 
 let close c =
   Mutex.protect c.mutex
@@ -364,7 +369,7 @@ and dispatch_message c = function
   | ServerMessage.Ping ->
     send_msg c ClientMessage.Pong
   | ServerMessage.Pong ->
-    PingPongTracker.decr c.ping_pongs
+    PingPongTracker.pong c.ping_pongs
   | ServerMessage.Info _ ->
     ()  (* TODO: handle updated info *)
   | ServerMessage.Err msg ->
