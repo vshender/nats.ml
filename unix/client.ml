@@ -17,12 +17,45 @@ let default_inbox_prefix = "_INBOX"
 type callback = Subscription.callback
 type error_callback = exn -> unit
 
-(** A module to track the number of unacknowledged PINGs. *)
+(** A module to track unacknowledged PINGs and manage their acknowledgement. *)
 module PingPongTracker = struct
-  (** The type used to track individual PINGs. *)
-  type ping = Semaphore.Binary.t
+  (** A type representing the possible outcomes of a PING. *)
+  type ping_result =
+    | Acknowledged
+    (** The PING has been successfully acknowledged with a PONG. *)
+    | TimedOut
+    (** The PING has timed out. *)
 
-  (** The type representing PING-PONG trackers. *)
+  (** A type used to track individual PINGs. *)
+  type ping = {
+    mutable result : ping_result option;
+    (** The result of the PING. *)
+    mutex : Mutex.t;
+    (** A mutex to protect access to the result. *)
+    condition : Condition.t;
+    (** A condition variable to signal result availability. *)
+  }
+
+  (** [wait ping] blocks the current thread until the result of [ping] is
+      available. *)
+  let wait ping =
+    Mutex.protect ping.mutex
+      begin fun () ->
+        while Option.is_none ping.result do
+          Condition.wait ping.condition ping.mutex
+        done;
+        Option.get ping.result
+      end
+
+  (** [resolve ping result] resolves [ping] with the specified [result], *)
+  let resolve ping result =
+    Mutex.protect ping.mutex
+      begin fun () ->
+        ping.result <- Some result;
+        Condition.signal ping.condition
+      end
+
+  (** A type representing PING-PONG trackers. *)
   type t = {
     pings : ping Queue.t;  (** A queue to hold unacknowledged PINGs. *)
     mutex : Mutex.t;       (** A mutex to protect access to the PINGs queue. *)
@@ -35,26 +68,27 @@ module PingPongTracker = struct
   }
 
   (** [ping t] creates a new unacknowledged PING and adds it to the PINGs
-      queue of the tracker [t].  Returns a semaphore that will be "released"
-      when the corresponding PONG is received. *)
+      queue of the tracker [t].  Returns the newly created PING object, which
+      can be used to wait for its result. *)
   let ping t =
-    let ping = Semaphore.Binary.make false in
+    let ping = {
+      result    = None;
+      mutex     = Mutex.create ();
+      condition = Condition.create ();
+    } in
     Mutex.protect t.mutex
       (fun () -> Queue.add ping t.pings);
     ping
 
-  (** [ping_and_wait t] adds a new unacknowledged PING to the PINGs queue of
-      the tracker [t] and blocks until the corresponding PONG is received. *)
-  let ping_and_wait t =
-    ping t |> Semaphore.Binary.acquire
-
-  (** [pong t] removes the first unacknowledged PING from the PINGs queue of
-      the tracker [t] and acknowledges it. *)
+  (** [pong t] acknowledges the first unacknowledged PING in the PINGs queue of
+      the tracker [t].  It removes the PING from the queue and resolves it as
+      [Acknowledged], signaling any thread waiting for the PING to be
+      acknowledged. *)
   let pong t =
     Mutex.protect t.mutex
       begin fun () ->
         match Queue.take_opt t.pings with
-        | Some ping -> Semaphore.Binary.release ping
+        | Some ping -> resolve ping Acknowledged
         | None      -> assert false
       end
 end
@@ -226,13 +260,40 @@ let send_msg c msg =
   Mutex.protect c.mutex
     (fun () -> serialize_client_message c.serializer msg)
 
-let flush c =
+let flush ?timeout c =
   if is_closed c then
     failwith "connection closed";
 
-  send_msg c ClientMessage.Ping;
-  (* PingPongTracker.incr_and_wait c.ping_pongs *)
-  PingPongTracker.ping_and_wait c.ping_pongs
+  let timeout_time =
+    timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
+
+  let ping = PingPongTracker.ping c.ping_pongs in
+  Mutex.protect c.mutex
+    begin fun () ->
+      CurrentSyncOperation.start
+        c.cur_sync_op
+        ~id:(Thread.id @@ Thread.self ())
+        ~timeout_time:timeout_time
+        ~signal_timeout:(fun () ->
+            PingPongTracker.resolve ping PingPongTracker.TimedOut);
+    end;
+
+  Fun.protect
+    ~finally:begin fun () ->
+      Mutex.protect c.mutex
+        begin fun () ->
+          CurrentSyncOperation.finish
+            c.cur_sync_op
+            ~id:(Thread.id @@ Thread.self ())
+        end
+    end
+    begin fun () ->
+      send_msg c ClientMessage.Ping;
+
+      match PingPongTracker.wait ping with
+      | Acknowledged -> ()
+      | TimedOut     -> failwith "timeout"  (* TODO: better errors *)
+    end
 
 let close c =
   Mutex.protect c.mutex

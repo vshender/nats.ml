@@ -73,10 +73,14 @@ val publish : t -> ?reply:string -> string -> string -> unit
     subject and waits for a reply within an optional timeout period. *)
 val request : t -> ?timeout:float -> string -> string -> Message.t option
 
-(** [flush t] ensures that all messages sent to the server have been processed.
-    This is useful to ensure message delivery before proceeding with further
-    actions. *)
-val flush : t -> unit
+(** [flush ?timeout t] performs a round trip to the server and return when it
+    receives the internal reply, or if the call times-out ([timeout] is
+    expressed in seconds).
+
+    This function ensures that all messages sent to the server have been
+    processed.  This is useful to ensure message delivery before proceeding
+    with further actions. *)
+val flush : ?timeout:float -> t -> unit
 
 (** [close t] closes the connection to the NATS server. *)
 val close : t -> unit
