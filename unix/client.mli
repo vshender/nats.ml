@@ -23,6 +23,8 @@ type error_callback = exn -> unit
     - [connect_timeout] (optional): specifies the connection timeout in
       seconds.
     - [keepalive] (optional): whether to keep the connection alive.
+    - [ing_interval] (optional): the period (in seconds) at which the client
+      will be sending PING commands to the server.  Defaults to 120 seconds.
     - [error_cb] (optional): a callback function to report errors.
     - [inbox_prefix] (optional): a custom prefix for inbox subjects.
 *)
@@ -33,6 +35,7 @@ val connect :
   ?pedantic:bool ->
   ?connect_timeout:float ->
   ?keepalive:bool ->
+  ?ping_interval:float ->
   ?error_cb:error_callback ->
   ?inbox_prefix:string ->
   unit -> t

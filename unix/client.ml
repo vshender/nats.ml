@@ -14,6 +14,8 @@ let client_version = "0.0.1-dev"
 
 let default_inbox_prefix = "_INBOX"
 
+let default_ping_interval = 120.  (* in seconds *)
+
 type callback = Subscription.callback
 type error_callback = exn -> unit
 
@@ -232,21 +234,23 @@ module PendingRequest = struct
 end
 
 type t = {
-  mutex               : Mutex.t;
-  sock                : file_descr;
-  in_buffer           : Bytes.t;
-  reader              : Reader.t;
-  serializer          : Faraday.t;
-  subscriptions       : Subscriptions.t;
-  resp_sub_prefix     : string;
-  mutable cur_request : PendingRequest.t option;
-  mutable running     : bool;
-  mutable io_thread   : Thread.t;
-  ping_pongs          : PingPongTracker.t;
-  cur_sync_op         : CurrentSyncOperation.t;
-  error_cb            : error_callback;
-  inbox_prefix        : string;
-  nuid                : Nuid.State.t;
+  mutex                  : Mutex.t;
+  sock                   : file_descr;
+  in_buffer              : Bytes.t;
+  reader                 : Reader.t;
+  serializer             : Faraday.t;
+  subscriptions          : Subscriptions.t;
+  resp_sub_prefix        : string;
+  mutable cur_request    : PendingRequest.t option;
+  mutable running        : bool;
+  mutable io_thread      : Thread.t;
+  ping_pongs             : PingPongTracker.t;
+  ping_interval          : float;
+  mutable next_ping_time : float;
+  cur_sync_op            : CurrentSyncOperation.t;
+  error_cb               : error_callback;
+  inbox_prefix           : string;
+  nuid                   : Nuid.State.t;
 }
 
 let new_inbox c =
@@ -265,6 +269,11 @@ let send_msg c msg =
   Mutex.protect c.mutex
     (fun () -> serialize_client_message c.serializer msg)
 
+let send_ping c =
+  let ping = PingPongTracker.ping c.ping_pongs in
+  send_msg c ClientMessage.Ping;
+  ping
+
 let flush ?timeout c =
   if is_closed c then
     failwith "connection closed";
@@ -272,24 +281,15 @@ let flush ?timeout c =
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
 
-  let ping = PingPongTracker.ping c.ping_pongs in
-  Mutex.protect c.mutex
-    begin fun () ->
-      CurrentSyncOperation.start
-        c.cur_sync_op
-        ~timeout_time:timeout_time
-        ~signal_timeout:(fun () ->
-            PingPongTracker.resolve ping PingPongTracker.TimedOut);
-    end;
-
+  let ping = send_ping c in
+  CurrentSyncOperation.start
+    c.cur_sync_op
+    ~timeout_time:timeout_time
+    ~signal_timeout:(fun () ->
+        PingPongTracker.resolve ping PingPongTracker.TimedOut);
   Fun.protect
-    ~finally:begin fun () ->
-      Mutex.protect c.mutex
-        (fun () -> CurrentSyncOperation.finish c.cur_sync_op)
-    end
+    ~finally:(fun () -> CurrentSyncOperation.finish c.cur_sync_op)
     begin fun () ->
-      send_msg c ClientMessage.Ping;
-
       match PingPongTracker.wait ping with
       | Acknowledged -> ()
       | TimedOut     -> failwith "timeout"  (* TODO: better errors *)
@@ -411,7 +411,12 @@ let rec io_loop c =
               raise Close
           in msg_processing_loop ();
 
-          (* TODO: send pings *)
+          (* PING/PONG *)
+          if Unix.gettimeofday () >= c.next_ping_time then begin
+            ignore @@ send_ping c;
+            Mutex.protect c.mutex
+              (fun () -> c.next_ping_time <- c.next_ping_time +. c.ping_interval)
+          end
         done
       end
   with
@@ -505,7 +510,10 @@ let request c ?timeout subject payload =
   Fun.protect
     ~finally:begin fun () ->
       Mutex.protect c.mutex
-        (fun () -> CurrentSyncOperation.finish c.cur_sync_op)
+        begin fun () ->
+          CurrentSyncOperation.finish c.cur_sync_op;
+          c.cur_request <- None
+        end
     end
     begin fun () ->
       publish c ~reply:resp_subject subject payload;
@@ -536,6 +544,7 @@ let connect
     ?(pedantic = false)
     ?connect_timeout
     ?(keepalive = false)  (* ??? *)
+    ?(ping_interval = default_ping_interval)
     ?(error_cb = default_error_callback)
     ?(inbox_prefix = default_inbox_prefix)
     () =
@@ -572,6 +581,8 @@ let connect
     running          = true;
     io_thread        = Thread.self ();
     ping_pongs       = PingPongTracker.create ();
+    ping_interval;
+    next_ping_time   = Unix.gettimeofday () +. ping_interval;
     cur_sync_op      = CurrentSyncOperation.create ();
     error_cb         = error_cb;
     inbox_prefix;
@@ -588,12 +599,12 @@ let connect
 
   let connect = ClientMessage.Connect
       (Connect.make
-         ~name:name
+         ~name
          ~lang:client_lang
          ~protocol:0
          ~version:client_version
-         ~verbose:verbose
-         ~pedantic:pedantic
+         ~verbose
+         ~pedantic
          ~tls_required:false
          ~echo:true
          ~no_responders:false
