@@ -95,23 +95,39 @@ module PingPongTracker = struct
       end
 end
 
+(** A module to manage the state of the current synchronous operation, ensuring
+    that only one synchronous operation is active at a time.  It also handles
+    timeouts by allowing a function to be called when the operation exceeds its
+    allotted time. *)
 module CurrentSyncOperation = struct
-  type cur_sync_op = {
-    thread_id      : int;
-    timeout_time   : float option;
+  (** A type representing a synchronous operation. *)
+  type sync_op = {
+    thread_id : int;
+    (** The ID of the thread that started the operation. *)
+    timeout_time : float option;
+    (** Optional timeout time as an absolute Unix timestamp. *)
     signal_timeout : unit -> unit;
+    (** A function to call when the operation times out. *)
   }
 
+  (** A type representing the state of the current synchronous operation. *)
   type t = {
-    mutable cur_sync_op : cur_sync_op option;
-    mutex               : Mutex.t;
+    mutable cur_sync_op : sync_op option;
+    (** The current synchronous operation, if any. *)
+    mutex : Mutex.t;
+    (** A mutex to protect access to [cur_sync_op]. *)
   }
 
+  (** [create ()] initializes a new current synchronous operation state. *)
   let create () = {
     cur_sync_op = None;
     mutex       = Mutex.create ();
   }
 
+  (** [start t ~timeout_time ~signal_timeout] begins a new synchronous
+      operation.
+
+      Raises [Failure] if another synchronous operation is already running. *)
   let start t ~timeout_time ~signal_timeout =
     Mutex.protect t.mutex
       begin fun () ->
@@ -125,6 +141,10 @@ module CurrentSyncOperation = struct
         | Some _ -> failwith "another sync operation is running"
       end
 
+  (** [finish t] ends the current synchronous operation.
+
+      Raises [Failure] if no operation is running or if the operation was
+      started by a different thread. *)
   let finish t =
     Mutex.protect t.mutex
       begin fun () ->
@@ -135,6 +155,25 @@ module CurrentSyncOperation = struct
         | None   -> failwith "no sync operation is running"
       end
 
+(** [with_sync_op t ~timeout_time ~signal_timeout f] executes function [f]
+    within a synchronous operation context.
+
+    This function ensures that [start] and [finish] are properly called, even
+    if [f] raises an exception.
+
+    Raises [Failure] if another synchronous operation is already running. *)
+  let with_sync_op t ~timeout_time ~signal_timeout f =
+    start t ~timeout_time ~signal_timeout;
+    Fun.protect
+      ~finally:(fun () -> finish t)
+      f
+
+  (** [check_timeout t] checks if the current synchronous operation has
+      exceeded its timeout, and if so, calls the [signal_timeout] function
+      associated with it.
+
+      This function should be called periodically to enforce timeouts on
+      synchronous operations. *)
   let check_timeout t =
     Mutex.protect t.mutex
       begin fun () ->
@@ -282,13 +321,11 @@ let flush ?timeout c =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
 
   let ping = send_ping c in
-  CurrentSyncOperation.start
+  CurrentSyncOperation.with_sync_op
     c.cur_sync_op
     ~timeout_time:timeout_time
     ~signal_timeout:(fun () ->
-        PingPongTracker.resolve ping PingPongTracker.TimedOut);
-  Fun.protect
-    ~finally:(fun () -> CurrentSyncOperation.finish c.cur_sync_op)
+        PingPongTracker.resolve ping PingPongTracker.TimedOut)
     begin fun () ->
       match PingPongTracker.wait ping with
       | Acknowledged -> ()
@@ -468,7 +505,6 @@ let next_msg_start_cb c sub timeout_time =
 let next_msg_finish_cb c _sub =
   CurrentSyncOperation.finish c.cur_sync_op
 
-
 let subscribe c ?group ?callback subject =
   if is_closed c then
     failwith "connection closed";
@@ -497,30 +533,25 @@ let request c ?timeout subject payload =
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
+
   let resp_subject = c.resp_sub_prefix ^ (Nuid.State.next c.nuid) in
   let req = PendingRequest.create resp_subject in
-  Mutex.protect c.mutex
-    begin fun () ->
-      CurrentSyncOperation.start
-        c.cur_sync_op
-        ~timeout_time
-        ~signal_timeout:(fun () -> PendingRequest.(resolve req TimeOut));
-      c.cur_request <- Some req
-    end;
-  Fun.protect
-    ~finally:begin fun () ->
-      Mutex.protect c.mutex
-        begin fun () ->
-          CurrentSyncOperation.finish c.cur_sync_op;
-          c.cur_request <- None
-        end
-    end
-    begin fun () ->
-      publish c ~reply:resp_subject subject payload;
 
-      match PendingRequest.wait req with
-      | Response msg -> Some msg
-      | TimeOut      -> None
+  CurrentSyncOperation.with_sync_op
+    c.cur_sync_op
+    ~timeout_time
+    ~signal_timeout:(fun () -> PendingRequest.(resolve req TimeOut))
+    begin fun () ->
+      Mutex.protect c.mutex (fun () -> c.cur_request <- Some req);
+      Fun.protect
+        ~finally:(fun () -> Mutex.protect c.mutex (fun () -> c.cur_request <- None))
+        begin fun () ->
+          publish c ~reply:resp_subject subject payload;
+
+          match PendingRequest.wait req with
+          | Response msg -> Some msg
+          | TimeOut      -> None
+        end
     end
 
 let drain c =
