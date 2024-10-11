@@ -4,20 +4,73 @@ open Compat
 
 type callback = Message.t -> unit
 
-(** A type representing a message queue for synchronous message delivery. *)
-type message_queue = {
-  messages : Message.t Queue.t;
-  (** A queue of pending messages. *)
-  mutex : Mutex.t;
-  (** A mutex for synchronizing access to the message queue. *)
-  condition : Condition.t;
-  (** A condition variable for signaling a new message or timeout. *)
-}
+(** A module for managing a thread-safe message queue. *)
+module MessageQueue = struct
+  (** A type representing a thread-safe message queue. *)
+  type t = {
+    messages : Message.t Queue.t;
+    (** A queue of pending messages. *)
+    mutex : Mutex.t;
+    (** A mutex for synchronizing access to the message queue. *)
+    condition : Condition.t;
+    (** A condition variable for signaling a new message or timeout. *)
+  }
+
+  (** [create ()] creates an empty message queue. *)
+  let create () = {
+    messages  = Queue.create ();
+    mutex     = Mutex.create ();
+    condition = Condition.create ();
+  }
+
+  (** [length t] returns the number of messages currently in the queue [t]. *)
+  let length t =
+    Mutex.protect t.mutex (fun () -> Queue.length t.messages)
+
+  (** [is_empty t] checks if the message queue [t] is empty. *)
+  let is_empty t =
+    length t = 0
+
+  (** [get ?timeout_time t] retrieves the next message from the message queue
+      [t].  If the queue is empty, it blocks until a message is available or
+      the timeout occurs. *)
+  let get ?timeout_time t =
+    let timed_out () =
+      match timeout_time with
+      | Some timeout_time -> Unix.gettimeofday () > timeout_time
+      | None              -> false
+    in
+    Mutex.protect t.mutex
+      begin fun () ->
+        while Queue.is_empty t.messages && not (timed_out ()) do
+          Condition.wait t.condition t.mutex
+        done;
+        Queue.take_opt t.messages
+      end
+
+  (** [put t msg] adds a new message [msg] to the message queue [t].  If the
+      queue was previously empty, it notifies any waiting threads that a new
+      message is available. *)
+  let put t msg =
+    Mutex.protect t.mutex
+      begin fun () ->
+        Queue.add msg t.messages;
+        if Queue.length t.messages = 1 then
+          Condition.signal t.condition
+      end
+
+  (** [signal_timeout t] signals the blocked call of [next_msg] to check if a
+      timeout has occured.  This can be used to wake up any waiting threads so
+      they can re-evaluate the timeout condition. *)
+  let signal_timeout t =
+    Mutex.protect t.mutex
+      (fun () -> Condition.signal t.condition)
+end
 
 (** A type representing the delivery mechanism for messages. *)
 type message_delivery =
-  | Callback of callback       (** Asynchronous delivery via a callback. *)
-  | Queue    of message_queue  (** Synchronous delivery via a message queue. *)
+  | Callback of callback        (** Asynchronous delivery via a callback. *)
+  | Queue    of MessageQueue.t  (** Synchronous delivery via a message queue. *)
 
 type t = {
   sid : int;
@@ -75,11 +128,7 @@ let create
     sid subject group callback =
   let delivery = match callback with
     | Some cb -> Callback cb
-    | None    -> Queue {
-        messages  = Queue.create ();
-        mutex     = Mutex.create ();
-        condition = Condition.create ();
-      }
+    | None    -> Queue (MessageQueue.create ())
   in {
     sid;
     subject;
@@ -116,20 +165,12 @@ let signal_timeout t =
   match t.delivery with
   | Callback _ ->
     failwith "signal_timeout should only be called for synchronous subscription"
-  | Queue q ->
-    Mutex.protect q.mutex
-      (fun () -> Condition.signal q.condition)
+  | Queue q -> MessageQueue.signal_timeout q
 
 let handle_msg t msg =
   begin match t.delivery with
     | Callback cb -> cb msg
-    | Queue q     ->
-      Mutex.protect q.mutex
-        begin fun () ->
-          Queue.add msg q.messages;
-          if Queue.length q.messages = 1 then
-            Condition.signal q.condition
-        end
+    | Queue q     -> MessageQueue.put q msg
   end;
 
   let remove_sub =
@@ -149,27 +190,13 @@ let next_msg ?timeout t =
   | Callback _ ->
     failwith "get_message should only be called for synchronous subscription"
   | Queue q ->
-    if is_closed t
-    && Mutex.protect q.mutex (fun () -> Queue.is_empty q.messages) then
+    if is_closed t && MessageQueue.is_empty q then
       failwith "subscription is closed";
 
     let timeout_time =
       timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
-    let timed_out () =
-      match timeout_time with
-      | Some timeout_time -> Unix.gettimeofday () > timeout_time
-      | None              -> false
-    in
 
     t.next_msg_start_cb |> Option.iter (fun cb -> cb t timeout_time);
     Fun.protect
       ~finally:(fun () -> t.next_msg_finish_cb |> Option.iter (fun cb -> cb t))
-      begin fun () ->
-        Mutex.protect q.mutex
-          begin fun () ->
-            while Queue.is_empty q.messages && not (timed_out ()) do
-              Condition.wait q.condition q.mutex
-            done;
-            Queue.take_opt q.messages
-          end
-      end
+      (fun () -> MessageQueue.get ?timeout_time q)
