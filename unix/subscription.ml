@@ -4,28 +4,49 @@ open Compat
 
 type callback = Message.t -> unit
 
+(** A type representing a message queue for synchronous message delivery. *)
 type message_queue = {
-  messages  : Message.t Queue.t;
-  mutex     : Mutex.t;
+  messages : Message.t Queue.t;
+  (** A queue of pending messages. *)
+  mutex : Mutex.t;
+  (** A mutex for synchronizing access to the message queue. *)
   condition : Condition.t;
+  (** A condition variable for signaling a new message or timeout. *)
 }
 
+(** A type representing the delivery mechanism for messages. *)
 type message_delivery =
-  | Callback of callback
-  | Queue    of message_queue
+  | Callback of callback       (** Asynchronous delivery via a callback. *)
+  | Queue    of message_queue  (** Synchronous delivery via a message queue. *)
 
 type t = {
-  sid                    : int;
-  subject                : string;
-  group                  : string option;
-  delivery               : message_delivery;
-  mutable closed         : bool;
-  mutable delivered      : int;
-  mutable max_msgs       : int option;
-  unsubscribe_cb         : (t -> unit) option;
+  sid : int;
+  (** The subscription identifier. *)
+  subject : string;
+  (** The subject to which the subscription is bound. *)
+  group : string option;
+  (** An optional group name for queue subscriptions. *)
+  delivery : message_delivery;
+  (** The message delivery mechanism. *)
+
+  mutable closed : bool;
+  (** Is subscription closed? *)
+  mutable delivered : int;
+  (** The number of messages delivered so far. *)
+  mutable max_msgs : int option;
+  (** An optional limit on the number of messages to deliver before
+      unsubscribing. *)
+  mutex : Mutex.t;
+  (** A mutex for thread-safe access to subscription state. *)
+
+  unsubscribe_cb : (t -> unit) option;
+  (** An optional callback invoked when unsubscribing. *)
   remove_subscription_cb : (t -> unit) option;
-  next_msg_start_cb      : (t -> float option -> unit) option;
-  next_msg_finish_cb     : (t -> unit) option;
+  (** An optional callback invoked when the subscription is removed. *)
+  next_msg_start_cb : (t -> float option -> unit) option;
+  (** An optional callback invoked before retrieving the next message. *)
+  next_msg_finish_cb : (t -> unit) option;
+  (** An optional callback invoked after retrieving the next message. *)
 }
 
 let sid t = t.sid
@@ -40,11 +61,13 @@ let is_sync t =
   | Queue _    -> true
 
 let is_closed t =
-  t.closed
+  Mutex.protect t.mutex (fun () -> t.closed)
 
-let delivered t = t.delivered
+let delivered t =
+  Mutex.protect t.mutex (fun () -> t.delivered)
 
-let max_msgs t = t.max_msgs
+let max_msgs t =
+  Mutex.protect t.mutex (fun () -> t.max_msgs)
 
 let create
     ?unsubscribe_cb ?remove_subscription_cb
@@ -65,6 +88,7 @@ let create
     closed    = false;
     delivered = 0;
     max_msgs  = None;
+    mutex     = Mutex.create ();
     unsubscribe_cb;
     remove_subscription_cb;
     next_msg_start_cb;
@@ -72,12 +96,18 @@ let create
   }
 
 let close t =
-  t.closed <- true
+  Mutex.protect t.mutex (fun () -> t.closed <- true)
 
 let unsubscribe ?max_msgs t =
-  t.max_msgs <- max_msgs;
+  let remove_sub =
+    Mutex.protect t.mutex
+      begin fun () ->
+        t.max_msgs <- max_msgs;
+        Option.(is_none max_msgs || t.delivered >= get max_msgs)
+      end
+  in
   t.unsubscribe_cb |> Option.iter (fun cb -> cb t);
-  if Option.(is_none max_msgs || t.delivered >= get max_msgs) then begin
+  if remove_sub then begin
     t.remove_subscription_cb |> Option.iter (fun cb -> cb t);
     close t
   end
@@ -101,27 +131,30 @@ let handle_msg t msg =
             Condition.signal q.condition
         end
   end;
-  t.delivered <- t.delivered + 1;
-  t.max_msgs |> Option.iter
-    begin fun max_msgs ->
-      if t.delivered >= max_msgs then begin
-        t.remove_subscription_cb |> Option.iter (fun cb -> cb t);
-        close t
+
+  let remove_sub =
+    Mutex.protect t.mutex
+      begin fun () ->
+        t.delivered <- t.delivered + 1;
+        Option.(is_some t.max_msgs && t.delivered >= get t.max_msgs)
       end
-    end
+  in
+  if remove_sub then begin
+    t.remove_subscription_cb |> Option.iter (fun cb -> cb t);
+    close t
+  end
 
 let next_msg ?timeout t =
   match t.delivery with
   | Callback _ ->
     failwith "get_message should only be called for synchronous subscription"
   | Queue q ->
-    if t.closed
+    if is_closed t
     && Mutex.protect q.mutex (fun () -> Queue.is_empty q.messages) then
       failwith "subscription is closed";
 
     let timeout_time =
       timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
-
     let timed_out () =
       match timeout_time with
       | Some timeout_time -> Unix.gettimeofday () > timeout_time
