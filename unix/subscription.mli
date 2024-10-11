@@ -36,6 +36,10 @@ val delivered : t -> int
     specified number of messages. *)
 val max_msgs : t -> int option
 
+(** [pending_msgs t] returns the number of pending messages in the internal
+    message queue of the subscription [t]. *)
+val pending_msgs : t -> int
+
 (** [create ?unsubscribe_cb ?remove_subscription_cb ?next_msg_start_cb ?next_msg_finish_cb sid subject group callback]
     creates a new subscription with the specified parameters.
 
