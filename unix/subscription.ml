@@ -12,7 +12,7 @@ type t = {
   group : string option;
   (** An optional group name for queue subscriptions. *)
 
-  queue : Message.t MessageQueue.t;
+  queue : Message.t SyncQueue.t;
   (** A pending messages queue. *)
   callback : callback option;
   (** Message handling function, if any. *)
@@ -56,7 +56,7 @@ let max_msgs t =
   Mutex.protect t.mutex (fun () -> t.max_msgs)
 
 let pending_msgs t =
-  MessageQueue.length t.queue
+  SyncQueue.length t.queue
 
 let create
     ?unsubscribe_cb ?remove_subscription_cb
@@ -66,7 +66,7 @@ let create
     sid;
     subject;
     group;
-    queue = MessageQueue.create ();
+    queue = SyncQueue.create ();
     callback;
     closed    = false;
     delivered = 0;
@@ -95,15 +95,11 @@ let unsubscribe ?max_msgs t =
     close t
   end
 
-let signal_timeout t =
-  if not (is_sync t) then
-    failwith "signal_timeout should only be called for synchronous subscription";
-  MessageQueue.signal_timeout t.queue
-
 let handle_msg t msg =
-  begin match t.callback with
-    | Some callback -> callback msg
-    | None          -> MessageQueue.put t.queue msg
+  SyncQueue.put t.queue msg;
+
+  if Option.is_some t.callback then begin
+    (Option.get t.callback) msg
   end;
 
   let remove_sub =
@@ -122,13 +118,24 @@ let next_msg ?timeout t =
   if not (is_sync t) then
     failwith "get_message should only be called for synchronous subscription";
 
-  if is_closed t && MessageQueue.is_empty t.queue then
+  if is_closed t && SyncQueue.is_empty t.queue then
     failwith "subscription is closed";
 
-  let timeout_time =
-    timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
+  let timeout_time, timed_out =
+    match timeout with
+    | Some timeout ->
+      let timeout_time = Unix.gettimeofday () +. timeout in
+      Some timeout_time, Some (fun () -> Unix.gettimeofday () > timeout_time)
+    | None ->
+      None, None
+  in
 
   t.next_msg_start_cb |> Option.iter (fun cb -> cb t timeout_time);
   Fun.protect
     ~finally:(fun () -> t.next_msg_finish_cb |> Option.iter (fun cb -> cb t))
-    (fun () -> MessageQueue.get ?timeout_time t.queue)
+    (fun () -> SyncQueue.get ?interrupt_cond:timed_out t.queue)
+
+let signal_timeout t =
+  if not (is_sync t) then
+    failwith "signal_timeout should only be called for synchronous subscription";
+  SyncQueue.signal_interrupt t.queue

@@ -73,10 +73,6 @@ val close : t -> unit
     after receiving the specified number of messages. *)
 val unsubscribe : ?max_msgs:int -> t -> unit
 
-(** [signal_timeout t] signals a timeout for the currently invoking [next_msg]
-    call on subscription [t]. *)
-val signal_timeout : t -> unit
-
 (** [handle_msg t msg] processes a received message [msg] for the subscription
     [t]. *)
 val handle_msg : t -> Message.t -> unit
@@ -85,3 +81,7 @@ val handle_msg : t -> Message.t -> unit
     subscription [t], with an optional timeout.  Fails if the subscription is
     asynchrnonous. *)
 val next_msg : ?timeout:float -> t -> Message.t option
+
+(** [signal_timeout t] signals a timeout for the currently invoking [next_msg]
+    call on subscription [t]. *)
+val signal_timeout : t -> unit

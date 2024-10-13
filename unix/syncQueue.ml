@@ -1,4 +1,4 @@
-(** A module for managing a thread-safe message queue. *)
+(** A module for managing thread-safe queues. *)
 
 open Compat
 
@@ -36,15 +36,12 @@ let try_get t =
       msg
     end
 
-let get ?timeout_time t =
-  let timed_out () =
-    match timeout_time with
-    | Some timeout_time -> Unix.gettimeofday () > timeout_time
-    | None              -> false
-  in
+let get ?interrupt_cond t =
+  let should_interrupt =
+    Option.value interrupt_cond ~default:(Fun.const false) in
   Mutex.protect t.mutex
     begin fun () ->
-      while Queue.is_empty t.messages && not (timed_out ()) do
+      while Queue.is_empty t.messages && not (should_interrupt ()) do
         Condition.wait t.nonempty t.mutex
       done;
       let msg = Queue.take_opt t.messages in
@@ -53,19 +50,16 @@ let get ?timeout_time t =
       msg
     end
 
-  let join ?timeout_time t =
-    let timed_out () =
-      match timeout_time with
-      | Some timeout_time -> Unix.gettimeofday () > timeout_time
-      | None              -> false
-    in
-    Mutex.protect t.mutex
-      begin fun () ->
-        while not (Queue.is_empty t.messages || timed_out ()) do
-          Condition.wait t.empty t.mutex
-        done;
-        Queue.is_empty t.messages
-      end
+let join ?interrupt_cond t =
+  let should_interrupt =
+    Option.value interrupt_cond ~default:(Fun.const false) in
+  Mutex.protect t.mutex
+    begin fun () ->
+      while not (Queue.is_empty t.messages || should_interrupt ()) do
+        Condition.wait t.empty t.mutex
+      done;
+      Queue.is_empty t.messages
+    end
 
 let put t msg =
   Mutex.protect t.mutex
@@ -75,7 +69,7 @@ let put t msg =
         Condition.signal t.nonempty
     end
 
-let signal_timeout t =
+let signal_interrupt t =
   Mutex.protect t.mutex
     begin fun () ->
       Condition.signal t.empty;
