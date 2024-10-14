@@ -5,7 +5,8 @@ An [OCaml](https://ocaml.org/) client for [NATS messaging system](https://nats.i
 ## Features
 
 - **Standard Unix Module**: Built using OCaml's standard `Unix` module, making it suitable for projects that don't use asynchronous programming libraries like [Lwt](https://github.com/ocsigen/lwt) or [Async](https://github.com/janestreet/async).
-- **Separate I/O Thread**: Utilizes a dedicated thread for all network I/O operations.  This design ensures that the main thread remains unblocked and responsive, simplifying the development of applications that use the client.
+- **Dedicated I/O Thread**: Utilizes a dedicated thread for all network I/O operations.  This design ensures that the main thread remains unblocked and responsive, simplifying the development of applications that use the client.
+- **Dedicated Message Processing Thread**: Handles the actual processing of messages after they are received.  This separation ensures that time-consuming message processing does not block the I/O thread, maintaining network responsiveness.
 
 ## Limitations
 

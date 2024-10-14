@@ -202,28 +202,30 @@ module Subscriptions = struct
     Mutex.protect t.mutex
       (fun () -> Hashtbl.iter (fun _sid sub -> f sub) t.subs)
 
-  let subscribe
+  let add
+      ?schedule_message_handling
+      ?sync_op_started ?sync_op_finished
+      ~unsubscribe ~remove_subscription
       t subject group callback
-      unsubscribe_cb remove_subscription_cb
-      next_msg_start_cb next_msg_finish_cb
     =
     Mutex.protect t.mutex
       begin fun () ->
         t.ssid <- t.ssid + 1;
         let sub = Subscription.create
-            ~unsubscribe_cb ~remove_subscription_cb
-            ~next_msg_start_cb ~next_msg_finish_cb
             t.ssid subject group callback
+            ?schedule_message_handling
+            ?sync_op_started ?sync_op_finished
+            ~unsubscribe ~remove_subscription
         in
         Hashtbl.add t.subs (Subscription.sid sub) sub;
         sub
       end
 
-  let unsubscribe t sub =
+  let remove t sub =
     Mutex.protect t.mutex
       (fun () -> Hashtbl.remove t.subs (Subscription.sid sub))
 
-  let unsubscribe_all t =
+  let remove_all t =
     Mutex.protect t.mutex
       (fun () -> Hashtbl.clear t.subs)
 
@@ -283,6 +285,8 @@ type t = {
   mutable cur_request    : PendingRequest.t option;
   mutable running        : bool;
   mutable io_thread      : Thread.t;
+  mutable msg_thread     : Thread.t;
+  msg_queue              : Subscription.t SyncQueue.t;
   ping_pongs             : PingPongTracker.t;
   ping_interval          : float;
   mutable next_ping_time : float;
@@ -333,9 +337,10 @@ let flush ?timeout c =
     end
 
 let close c =
-  Mutex.protect c.mutex
-    (fun () -> c.running <- false);
-  Thread.join c.io_thread
+  Mutex.protect c.mutex (fun () -> c.running <- false);
+  SyncQueue.signal_interrupt c.msg_queue;
+  Thread.join c.io_thread;
+  Thread.join c.msg_thread
 
 let read_client_msg ?timeout c =
   let start_time = gettimeofday () in
@@ -377,7 +382,7 @@ let rec io_loop c =
         Mutex.protect c.mutex
           begin fun () ->
             Subscriptions.iter c.subscriptions Subscription.close;
-            Subscriptions.unsubscribe_all c.subscriptions;
+            Subscriptions.remove_all c.subscriptions;
             shutdown c.sock SHUTDOWN_ALL;
             Unix.close c.sock;
             Faraday.close c.serializer;
@@ -480,14 +485,30 @@ and dispatch_message c = function
   | ServerMessage.Ok -> ()
   | _ -> ()
 
+let msg_loop c =
+  let should_stop () = is_running c = false in
+
+  while is_running c do
+    match SyncQueue.get ~interrupt_cond:should_stop c.msg_queue with
+    | Some sub ->
+      let msg = Subscription.next_msg_internal sub in
+      let callback = Option.get @@ Subscription.callback sub in
+      callback msg
+    | None -> ()  (* interrupted *)
+  done
+
 let default_error_callback exn =
   Printf.fprintf
     Stdlib.stderr
     "NATS: encoutered error %s\n%!" (Printexc.to_string exn)
 
-let unsubscribe_cb c sub =
+let schedule_message_handling c sub ~msg:_msg =
+  SyncQueue.put c.msg_queue sub
+
+let unsubscribe c sub =
   if is_closed c then
     failwith "connection closed";
+
   let unsub_msg = ClientMessage.UnSub
       (UnSub.make
          ~sid:(string_of_int (Subscription.sid sub))
@@ -496,24 +517,31 @@ let unsubscribe_cb c sub =
   in
   send_msg c unsub_msg
 
-let next_msg_start_cb c sub timeout_time =
+let sync_sub_op_started c sub ~timeout_time =
   CurrentSyncOperation.start
     c.cur_sync_op
     ~timeout_time
     ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
 
-let next_msg_finish_cb c _sub =
+let sync_sub_op_finished c _sub =
   CurrentSyncOperation.finish c.cur_sync_op
 
 let subscribe c ?group ?callback subject =
   if is_closed c then
     failwith "connection closed";
-  let sub = Subscriptions.subscribe
+
+  let schedule_message_handling =
+    match callback with
+    | Some _ -> Some (schedule_message_handling c)
+    | None   -> None
+  in
+  let sub = Subscriptions.add
       c.subscriptions subject group callback
-      (unsubscribe_cb c)
-      (Subscriptions.unsubscribe c.subscriptions)
-      (next_msg_start_cb c)
-      (next_msg_finish_cb c)
+      ?schedule_message_handling
+      ~sync_op_started:(sync_sub_op_started c)
+      ~sync_op_finished:(sync_sub_op_finished c)
+      ~unsubscribe:(unsubscribe c)
+      ~remove_subscription:(Subscriptions.remove c.subscriptions)
   in
   let sub_msg = ClientMessage.Sub
       (Sub.make ~subject ?group ~sid:(string_of_int (Subscription.sid sub)) ())
@@ -566,6 +594,7 @@ let drain c =
       send_msg c unsub_msg
     end;
   flush c;
+  ignore (SyncQueue.join c.msg_queue);
   close c
 
 let connect
@@ -611,6 +640,8 @@ let connect
     cur_request      = None;
     running          = true;
     io_thread        = Thread.self ();
+    msg_thread       = Thread.self ();
+    msg_queue        = SyncQueue.create ();
     ping_pongs       = PingPongTracker.create ();
     ping_interval;
     next_ping_time   = Unix.gettimeofday () +. ping_interval;
@@ -650,15 +681,14 @@ let connect
           begin fun () ->
             let req = conn.cur_request in
             match req with
-            | Some req ->
-              if msg.subject = req.inbox then
-                PendingRequest.(resolve req (Response msg))
-            | None ->
-              ()
+            | Some req when msg.subject = req.inbox ->
+              PendingRequest.(resolve req (Response msg))
+            | _ -> ()
           end
       end
   in
 
-  conn.io_thread <- Thread.create io_loop conn;
+  conn.io_thread  <- Thread.create io_loop conn;
+  conn.msg_thread <- Thread.create msg_loop conn;
 
   conn
