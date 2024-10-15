@@ -3,7 +3,7 @@
 (** The type of NATS connections. *)
 type t
 
-(** The type of callback functions invoked when a message is received. *)
+(** The type of callback functions for handling income messages *)
 type callback = Message.t -> unit
 
 (** The type of callback functions for handling errors. *)
@@ -57,7 +57,8 @@ val new_inbox : t -> string
     more than one token.
 
     If [callback] is given, the subscription is asynchronous and messages will
-    be delivered to [callback].
+    be delivered to [callback].  [callback] will be called in a separate
+    message processing thread.
 
     If [callback] is not given, the subscription is synchronous and
     the {!Subscription.next_msg} function is used to obtain the delivered
@@ -65,29 +66,40 @@ val new_inbox : t -> string
 
     If [queue] is given the subscription is a queue subscription.  All
     subscribers with the same queue name will form the queue group and only one
-    member of the group will be selected to receive any given message. *)
+    member of the group will be selected to receive any given message.
+
+    Raises [Failure] if the connection is closed. *)
 val subscribe : t -> ?group:string -> ?callback:callback -> string -> Subscription.t
 
 (** [publish t ?reply subject payload] publishes a message to the given subject
-    with an optional reply-to subject. *)
+    with an optional reply-to subject.
+
+    Raises [Failure] if the connection is closed. *)
 val publish : t -> ?reply:string -> string -> string -> unit
 
 (** [request t ?timeout subject payload] sends a request message to the given
-    subject and waits for a reply within an optional timeout period. *)
+    subject and waits for a reply within an optional timeout period.
+
+    Raises [Failure] if the connection is closed. *)
 val request : t -> ?timeout:float -> string -> string -> Message.t option
 
-(** [flush ?timeout t] performs a round trip to the server and return when it
+(** [flush ?timeout t] performs a round trip to the server and returns when it
     receives the internal reply, or if the call times-out ([timeout] is
     expressed in seconds).
 
     This function ensures that all messages sent to the server have been
     processed.  This is useful to ensure message delivery before proceeding
-    with further actions. *)
+    with further actions.
+
+    Raises [Failure] if the connection is closed or if the flush operation
+    times out. *)
 val flush : ?timeout:float -> t -> unit
 
 (** [close t] closes the connection to the NATS server. *)
 val close : t -> unit
 
 (** [drain t] safely closes the connection after ensuring all buffered messages
-    have been sent and processed by subscriptions. *)
+    have been sent and processed by subscriptions.
+
+    Raises [Failure] if the connection is already closed. *)
 val drain : t -> unit

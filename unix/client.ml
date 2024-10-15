@@ -19,23 +19,24 @@ let default_ping_interval = 120.  (* in seconds *)
 type callback = Subscription.callback
 type error_callback = exn -> unit
 
-(** A module to track unacknowledged PINGs and manage their acknowledgement. *)
+(** A module to track unacknowledged PINGs and manage their acknowledgements. *)
 module PingPongTracker = struct
   (** A type representing the possible outcomes of a PING. *)
   type ping_result =
     | Acknowledged
     (** The PING has been successfully acknowledged with a PONG. *)
     | TimedOut
-    (** The PING has timed out. *)
+    (** The PING has timed out without receiving a PONG. *)
 
-  (** A type used to track individual PINGs. *)
+  (** A type used to represent an individual PING that is awaiting
+      acknowledgement. *)
   type ping = {
     mutable result : ping_result option;
-    (** The result of the PING. *)
+    (** The result of the PING, if available. *)
     mutex : Mutex.t;
-    (** A mutex to protect access to the result. *)
+    (** A mutex to protect access to the PING's result. *)
     condition : Condition.t;
-    (** A condition variable to signal result availability. *)
+    (** A condition variable to signal the result availability. *)
   }
 
   (** [wait ping] blocks the current thread until the result of [ping] is
@@ -49,7 +50,9 @@ module PingPongTracker = struct
         Option.get ping.result
       end
 
-  (** [resolve ping result] resolves [ping] with the specified [result], *)
+  (** [resolve ping result] resolves [ping] with the specified [result], making
+      the result available and notifying any threads that are waiting on the
+      PING acknowledgement. *)
   let resolve ping result =
     Mutex.protect ping.mutex
       begin fun () ->
@@ -57,7 +60,7 @@ module PingPongTracker = struct
         Condition.signal ping.condition
       end
 
-  (** A type representing PING-PONG trackers. *)
+  (** A type representing the tracker for managing unacknowledged PINGs. *)
   type t = {
     pings : ping Queue.t;  (** A queue to hold unacknowledged PINGs. *)
     mutex : Mutex.t;       (** A mutex to protect access to the PINGs queue. *)
@@ -103,9 +106,9 @@ module CurrentSyncOperation = struct
   (** A type representing a synchronous operation. *)
   type sync_op = {
     thread_id : int;
-    (** The ID of the thread that started the operation. *)
+    (** The ID of the thread that started the synchronous operation. *)
     timeout_time : float option;
-    (** Optional timeout time as an absolute Unix timestamp. *)
+    (** An optional timeout time as an absolute Unix timestamp (in seconds). *)
     signal_timeout : unit -> unit;
     (** A function to call when the operation times out. *)
   }
@@ -118,14 +121,16 @@ module CurrentSyncOperation = struct
     (** A mutex to protect access to [cur_sync_op]. *)
   }
 
-  (** [create ()] initializes a new current synchronous operation state. *)
+  (** [create ()] creates a new instance of the current synchronous operation
+      state. *)
   let create () = {
     cur_sync_op = None;
     mutex       = Mutex.create ();
   }
 
-  (** [start t ~timeout_time ~signal_timeout] begins a new synchronous
-      operation.
+  (** [start t ~timeout_time ~signal_timeout] starts a new synchronous
+      operation.  The operation is associated with the calling thread and has
+      an optional [timeout_time].
 
       Raises [Failure] if another synchronous operation is already running. *)
   let start t ~timeout_time ~signal_timeout =
@@ -141,7 +146,8 @@ module CurrentSyncOperation = struct
         | Some _ -> failwith "another sync operation is running"
       end
 
-  (** [finish t] ends the current synchronous operation.
+  (** [finish t] finishes the current synchronous operation.  It ensures that
+      the calling thread matches the thread that started the operation.
 
       Raises [Failure] if no operation is running or if the operation was
       started by a different thread. *)
@@ -156,10 +162,8 @@ module CurrentSyncOperation = struct
       end
 
 (** [with_sync_op t ~timeout_time ~signal_timeout f] executes function [f]
-    within a synchronous operation context.
-
-    This function ensures that [start] and [finish] are properly called, even
-    if [f] raises an exception.
+    within a synchronous operation context.  It ensures that the operation is
+    properly started and finished, even if [f] raises an exception.
 
     Raises [Failure] if another synchronous operation is already running. *)
   let with_sync_op t ~timeout_time ~signal_timeout f =
@@ -185,23 +189,36 @@ module CurrentSyncOperation = struct
       end
 end
 
+(** A module for managing active NATS subscriptions. *)
 module Subscriptions = struct
+  (** A type representing a collection of active NATS subscriptions. *)
   type t = {
     mutable ssid : int;
-    subs         : (int, Subscription.t) Hashtbl.t;
-    mutex        : Mutex.t;
+    (** A counter for generating unique subscription identifiers. *)
+    subs : (int, Subscription.t) Hashtbl.t;
+    (** A hashtable storing active subscriptions by their identifier. *)
+    mutex : Mutex.t;
+    (** A mutex to ensure thread-safe access to the subscription collection. *)
   }
 
+  (** [create ()] creates a new, empty collection of active subscriptions. *)
   let create () = {
     ssid  = 0;
     subs  = Hashtbl.create 32;
     mutex = Mutex.create ();
   }
 
+  (** [iter t f] applies the function [f] to each subscription in the
+      collection [t]. *)
   let iter t f =
     Mutex.protect t.mutex
       (fun () -> Hashtbl.iter (fun _sid sub -> f sub) t.subs)
 
+(** [add ?schedule_message_handling ?sync_op_started ?sync_op_finished ~unsubscribe ~remove_subscription t subject group callback]
+    adds a new subscription to the collection [t] with the specified
+    parameters.
+
+    Returns the newly created subscription. *)
   let add
       ?schedule_message_handling
       ?sync_op_started ?sync_op_finished
@@ -221,14 +238,20 @@ module Subscriptions = struct
         sub
       end
 
+  (** [remove t sub] removes the given subscription [sub] from the collection
+      [t]. *)
   let remove t sub =
     Mutex.protect t.mutex
       (fun () -> Hashtbl.remove t.subs (Subscription.sid sub))
 
+  (** [remove_all t] removes all subscriptions from the collection [t]. *)
   let remove_all t =
     Mutex.protect t.mutex
       (fun () -> Hashtbl.clear t.subs)
 
+  (** [handle_msg t msg] handles an incoming message [msg] by finding the
+      corresponding subscription in the collection [t] and invoking its message
+      handler.  If the subscription is not found, the message is ignored. *)
   let handle_msg t msg =
     let sub = Mutex.protect t.mutex
         (fun () -> Hashtbl.find_opt t.subs msg.Message.sid)
@@ -238,18 +261,27 @@ module Subscriptions = struct
     | None     -> ()
 end
 
+(** A module for managing pending requests and their results. *)
 module PendingRequest = struct
+  (** A type representing results of a pending request. *)
   type result =
-    | Response of Message.t
-    | TimeOut
+    | Response of Message.t  (** A successful response containing a message. *)
+    | TimeOut                (** The request timed out without a response. *)
 
+  (** A type representing a pending request that waits for a result. *)
   type t = {
-    inbox          : string;
+    inbox : string;
+    (** The inbox subject for receiving the response. *)
     mutable result : result option;
-    mutex          : Mutex.t;
-    condition      : Condition.t;
+    (** The result of the request, if available. *)
+    mutex : Mutex.t;
+    (** A mutex to protect access to the result. *)
+    condition : Condition.t;
+    (** A condition variable to signal when the result becomes available. *)
   }
 
+  (** [create inbox] creates a new pending request with the specified [inbox]
+      subject. *)
   let create inbox = {
     inbox;
     result    = None;
@@ -257,6 +289,9 @@ module PendingRequest = struct
     condition = Condition.create ();
   }
 
+  (** [wait t] blocks the current thread until the result of the pending
+      request [t] is available.  Once the result becomes available, it returns
+      the [result]. *)
   let wait t =
     Mutex.protect t.mutex
       begin fun () ->
@@ -266,6 +301,9 @@ module PendingRequest = struct
         Option.get t.result
       end
 
+  (** [resolve t result] resolves the pending request [t] with the given
+      [result], making the result available and notifying any threads waiting
+      on it. *)
   let resolve t result =
     Mutex.protect t.mutex
       begin fun () ->
@@ -274,37 +312,62 @@ module PendingRequest = struct
       end
 end
 
+(** The type of NATS connection. *)
 type t = {
-  mutex                  : Mutex.t;
-  sock                   : file_descr;
-  in_buffer              : Bytes.t;
-  reader                 : Reader.t;
-  serializer             : Faraday.t;
-  subscriptions          : Subscriptions.t;
-  resp_sub_prefix        : string;
-  mutable cur_request    : PendingRequest.t option;
-  mutable running        : bool;
-  mutable io_thread      : Thread.t;
-  mutable msg_thread     : Thread.t;
-  msg_queue              : Subscription.t SyncQueue.t;
-  ping_pongs             : PingPongTracker.t;
-  ping_interval          : float;
+  mutex : Mutex.t;
+  (** A mutex for synchronizing access to the connection state. *)
+  sock : file_descr;
+  (** The socket file descriptor for the connection. *)
+  in_buffer : Bytes.t;
+  (** A buffer for reading incoming data. *)
+  reader : Reader.t;
+  (** The reader for parsing incoming messages. *)
+  serializer : Faraday.t;
+  (** The serializer for sending outgoing messages. *)
+  nuid : Nuid.State.t;
+  (* The state for generating unique subject identifiers. *)
+  inbox_prefix : string;
+  (** The prefix used for generating inbox subjects. *)
+  resp_sub_prefix : string;
+  (** The prefix for response subscription subjects. *)
+  subscriptions : Subscriptions.t;
+  (** The subscription manager for handling active subscriptions. *)
+  cur_sync_op : CurrentSyncOperation.t;
+  (** The current synchronous operation being executed. *)
+  mutable cur_request : PendingRequest.t option;
+  (** The current pending request, if any. *)
+  ping_pongs : PingPongTracker.t;
+  (** Tracks unacknowledged PINGs. *)
+  ping_interval : float;
+  (** The interval (in seconds) at which PING messages are sent. *)
   mutable next_ping_time : float;
-  cur_sync_op            : CurrentSyncOperation.t;
-  error_cb               : error_callback;
-  inbox_prefix           : string;
-  nuid                   : Nuid.State.t;
+  (** The time when the next PING should be sent. *)
+  mutable running : bool;
+  (** Indicates whether the client is running. *)
+  mutable io_thread : Thread.t;
+  (** The thread handling network I/O operations. *)
+  mutable msg_thread : Thread.t;
+  (** The thread handling message processing. *)
+  msg_queue : Subscription.t SyncQueue.t;
+  (** A queue of pending subscription messages. *)
+  error_cb : error_callback;
+  (** A callback function to handle errors encountered during operation. *)
 }
 
 let new_inbox c =
   Printf.sprintf "%s.%s" c.inbox_prefix (Nuid.State.next c.nuid)
 
+(** [is_running c] indicates if the client [c] is currently running.*)
 let is_running c =
-  c.running
+  Mutex.protect c.mutex (fun () -> c.running)
 
+(** [is_closed c] indicates if the client [c] is closed. *)
 let is_closed c =
-  not c.running
+  not (is_running c)
 
+(** [send_msg c msg] sends a message [msg] to the server using the client [c].
+
+    Raises [Failure] if the connection is closed. *)
 let send_msg c msg =
   if is_closed c then
     failwith "connection closed";
@@ -312,6 +375,9 @@ let send_msg c msg =
   Mutex.protect c.mutex
     (fun () -> serialize_client_message c.serializer msg)
 
+(** [send_ping c] sends a PING message using the client [c] and returns the
+    corresponding PING tracker object.  This can be used to wait for the PONG
+    response. *)
 let send_ping c =
   let ping = PingPongTracker.ping c.ping_pongs in
   send_msg c ClientMessage.Ping;
@@ -342,6 +408,12 @@ let close c =
   Thread.join c.io_thread;
   Thread.join c.msg_thread
 
+(** [read_client_msg ?timeout c] reads the next message from the server for the
+    client [c].  If a [timeout] is provided, the operation will fail if the
+    timeout is exceeded.
+
+    Raises [Failure] if the connection is closed or if there is an error
+    parsing the message.*)
 let read_client_msg ?timeout c =
   let start_time = gettimeofday () in
   let time_remaining () =
@@ -372,6 +444,8 @@ let read_client_msg ?timeout c =
   in
   loop ()
 
+(** [io_loop c] runs the I/O loop for the client [c], managing both incoming
+    and outgoing messages. *)
 let rec io_loop c =
   let exception Close in
   let select_timeout = 0.05 in
@@ -456,8 +530,7 @@ let rec io_loop c =
           (* PING/PONG *)
           if Unix.gettimeofday () >= c.next_ping_time then begin
             ignore @@ send_ping c;
-            Mutex.protect c.mutex
-              (fun () -> c.next_ping_time <- c.next_ping_time +. c.ping_interval)
+            c.next_ping_time <- c.next_ping_time +. c.ping_interval
           end
         done
       end
@@ -465,6 +538,8 @@ let rec io_loop c =
   | Close -> ()
   | exn -> c.error_cb exn
 
+(** [dispatch_message c msg] handles an incoming message [msg] from the server
+    for the client [c]. *)
 and dispatch_message c = function
   | ServerMessage.Msg msg ->
     Subscriptions.handle_msg c.subscriptions {
@@ -485,6 +560,11 @@ and dispatch_message c = function
   | ServerMessage.Ok -> ()
   | _ -> ()
 
+(** [msg_loop c] processes incoming messages for the client [c].
+
+    This loop continues running as long as the client is active, fetching
+    messages from the queue and invoking the appropriate subscription
+    callbacks  *)
 let msg_loop c =
   let should_stop () = is_running c = false in
 
@@ -497,14 +577,22 @@ let msg_loop c =
     | None -> ()  (* interrupted *)
   done
 
+(** [default_error_callback exn] is the default callback for handling errors.
+    It prints the encountered exception to standard error. *)
 let default_error_callback exn =
   Printf.fprintf
     Stdlib.stderr
     "NATS: encoutered error %s\n%!" (Printexc.to_string exn)
 
+(** [schedule_message_handling c sub ~msg] schedules a message from the
+    subscription [sub] to be processed by adding it to the client's message
+    queue. *)
 let schedule_message_handling c sub ~msg:_msg =
   SyncQueue.put c.msg_queue sub
 
+(** [unsubscribe c sub] sends an UNSUB message to unsubscribe the subscription
+    [sub] using the client [c].  Raises [Failure] if the connection is
+    closed. *)
 let unsubscribe c sub =
   if is_closed c then
     failwith "connection closed";
@@ -517,12 +605,17 @@ let unsubscribe c sub =
   in
   send_msg c unsub_msg
 
+(** [sync_sub_op_started c sub ~timeout_time] registers the start of a
+    synchronous operation for the subscription [sub], with an optional
+    timeout. *)
 let sync_sub_op_started c sub ~timeout_time =
   CurrentSyncOperation.start
     c.cur_sync_op
     ~timeout_time
     ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
 
+(** [sync_sub_op_finished c sub] marks the completion of a synchronous
+    operation for the subscription [sub].*)
 let sync_sub_op_finished c _sub =
   CurrentSyncOperation.finish c.cur_sync_op
 
@@ -630,23 +723,23 @@ let connect
   let nuid = Nuid.State.create () in
 
   let conn = {
-    mutex            = Mutex.create ();
+    mutex           = Mutex.create ();
     sock;
-    in_buffer        = Bytes.create 0x1000;
-    reader           = Reader.create ();
-    serializer       = Faraday.create 0x1000;
-    subscriptions    = Subscriptions.create ();
-    resp_sub_prefix  = Printf.sprintf "%s.%s." inbox_prefix (Nuid.State.next nuid);
-    cur_request      = None;
-    running          = true;
-    io_thread        = Thread.self ();
-    msg_thread       = Thread.self ();
-    msg_queue        = SyncQueue.create ();
-    ping_pongs       = PingPongTracker.create ();
+    in_buffer       = Bytes.create 0x1000;
+    reader          = Reader.create ();
+    serializer      = Faraday.create 0x1000;
+    subscriptions   = Subscriptions.create ();
+    resp_sub_prefix = Printf.sprintf "%s.%s." inbox_prefix (Nuid.State.next nuid);
+    cur_request     = None;
+    running         = true;
+    io_thread       = Thread.self ();
+    msg_thread      = Thread.self ();
+    msg_queue       = SyncQueue.create ();
+    ping_pongs      = PingPongTracker.create ();
     ping_interval;
-    next_ping_time   = Unix.gettimeofday () +. ping_interval;
-    cur_sync_op      = CurrentSyncOperation.create ();
-    error_cb         = error_cb;
+    next_ping_time  = Unix.gettimeofday () +. ping_interval;
+    cur_sync_op     = CurrentSyncOperation.create ();
+    error_cb        = error_cb;
     inbox_prefix;
     nuid;
   } in
