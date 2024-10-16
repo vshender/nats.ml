@@ -46,11 +46,6 @@ let main () =
   begin match msg with
     | Some msg -> Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
     | None     -> assert false
-  end;
-
-  (* Drain is a safe way to ensure all buffered messages that were published
-     are sent and all buffered messages received on a subscription are
-     processed before closing the connection. *)
-  Client.drain nc
+  end
 
 let () = main ()

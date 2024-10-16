@@ -24,8 +24,8 @@ let main () =
   Client.publish nc "greet.bob" "hello 3";
 
   (* Drain is a safe way to ensure all buffered messages that were published
-     are sent and all buffered messages received on a subscription are
-     processed before closing the connection. *)
+     are sent and all buffered messages received on asynchronous subscriptions
+     are processed before closing the connection. *)
   Client.drain nc
 
 let () = main ()

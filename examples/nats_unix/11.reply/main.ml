@@ -40,13 +40,15 @@ let main () =
   Client.publish nc ~reply:reply_to "request" "request 5";
   Client.publish nc ~reply:reply_to "request" "request 6";
 
-  (* Flush the connection to ensure all published messages are sent to the
-     server before proceeding. *)
+  (* Flush the connection to ensure all published requests are sent to the
+     server and then received by the application before proceeding. *)
   Client.flush nc;
 
-  (* Drain is a safe way to ensure all buffered messages that were published
-     are sent and all buffered messages received on a subscription are
-     processed before closing the connection. *)
+  (* It is not guaranteed that all requests have been processed at this point,
+     as processing is done asynchronously. *)
+
+  (* Drain the connection to ensure all published responses are sent to the
+     server and then received and processed by the application. *)
   Client.drain nc
 
 let () = main ()

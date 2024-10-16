@@ -1,4 +1,4 @@
-(** Unsubscribe from synchronous subscription example. *)
+(** Unsubscribing from synchronous subscription example. *)
 
 open Nats_unix
 
@@ -38,11 +38,6 @@ let main () =
   Printf.printf "getting the next message after unsubscribe...\n%!";
   begin try ignore (Subscription.next_msg sub ~timeout:1.) with
     | Failure e -> Printf.printf "%s\n%!" e  (* subscription is closed *)
-  end;
-
-  (* Drain is a safe way to ensure all buffered messages that were published
-     are sent and all buffered messages received on a subscription are
-     processed before closing the connection. *)
-  Client.drain nc
+  end
 
 let () = main ()

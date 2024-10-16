@@ -1,4 +1,4 @@
-(** Unsubscribe after N messages example. *)
+(** Unsubscribing after N messages example. *)
 
 open Nats_unix
 
@@ -9,6 +9,7 @@ let main () =
   (* Create an asynchronous subscription on the "greet.*" wildcard. *)
   let sub = Client.subscribe nc "greet.*"
       ~callback:(fun msg ->
+          Thread.delay 1.;  (* simulate message processing delay *)
           Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject)
   in
 
@@ -22,8 +23,8 @@ let main () =
   Client.publish nc "greet.ted" "hello 4";
 
   (* Drain is a safe way to ensure all buffered messages that were published
-     are sent and all buffered messages received on a subscription are
-     processed before closing the connection. *)
+     are sent and all buffered messages received on asynchronous subscriptions
+     are processed before closing the connection. *)
   Client.drain nc
 
 let () = main ()
