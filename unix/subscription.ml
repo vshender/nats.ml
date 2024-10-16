@@ -28,8 +28,10 @@ type t = {
   mutex : Mutex.t;
   (** A mutex for thread-safe access to the subscription state. *)
 
+  flush : t -> timeout:float option -> unit;
+  (** A function to perform a flush. *)
   unsubscribe : t -> unit;
-  (** A function to perform unsubscription. *)
+  (** A function to perform an unsubscription. *)
   remove_subscription : t -> unit;
   (** A function to deregister the subscription. *)
   schedule_message_handling : (t -> msg:Message.t -> unit) option;
@@ -43,7 +45,7 @@ type t = {
 let create
     ?schedule_message_handling
     ?sync_op_started ?sync_op_finished
-    ~unsubscribe ~remove_subscription
+    ~flush ~unsubscribe ~remove_subscription
     sid subject group callback =
   if Option.is_none callback && Option.is_some schedule_message_handling then
     failwith "cannot use schedule_message_handling with synchronous subscriptions";
@@ -58,6 +60,7 @@ let create
     max_msgs  = None;
     mutex     = Mutex.create ();
     schedule_message_handling;
+    flush;
     unsubscribe;
     remove_subscription;
     sync_op_started;
@@ -90,23 +93,6 @@ let pending_msgs t =
 let close t =
   Mutex.protect t.mutex (fun () -> t.closed <- true)
 
-let unsubscribe ?max_msgs t =
-  if is_closed t then
-    failwith "subscription is closed";
-
-  let remove_sub =
-    Mutex.protect t.mutex
-      begin fun () ->
-        t.max_msgs <- max_msgs;
-        Option.(is_none max_msgs || t.delivered >= get max_msgs)
-      end
-  in
-  t.unsubscribe t;
-  if remove_sub then begin
-    t.remove_subscription t;
-    close t
-  end
-
 let handle_msg t msg =
   if is_closed t then
     failwith "subscription is closed";
@@ -133,7 +119,7 @@ let handle_msg t msg =
   end
 
 let next_msg_internal t =
-  Option.get @@ SyncQueue.get t.queue
+  SyncQueue.try_get t.queue
 
 (** [with_sync_op ?timeout t f] wraps a synchronous operation on the
     subscription [t], optionally specifying a timeout. *)
@@ -161,7 +147,54 @@ let next_msg ?timeout t =
   with_sync_op ?timeout t
     (fun interrupt_cond -> SyncQueue.get ?interrupt_cond t.queue)
 
+let unsubscribe ?max_msgs t =
+  if is_closed t then
+    failwith "subscription is closed";
+
+  let remove_sub =
+    Mutex.protect t.mutex
+      begin fun () ->
+        t.max_msgs <- max_msgs;
+        Option.(is_none max_msgs || t.delivered >= get max_msgs)
+      end
+  in
+  t.unsubscribe t;
+  if remove_sub then begin
+    t.remove_subscription t;
+    close t
+  end
+
+let drain ?timeout t =
+  if is_sync t then
+    failwith "drain is only valid for asynchronous subscriptions";
+  if is_closed t then
+    failwith "subscription is closed";
+
+  let timeout_time =
+    timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
+
+  t.unsubscribe t;
+  t.flush t ~timeout;
+
+  (* Calculate remaining execution time. *)
+  let timeout =
+    timeout_time
+    |> Option.map (fun timeout_time -> timeout_time -. Unix.gettimeofday ())
+  in
+
+  (* Wait until all pending messages are processed. *)
+  let all_msgs_processed =
+    with_sync_op ?timeout t
+      (fun interrupt_cond -> SyncQueue.join ?interrupt_cond t.queue)
+  in
+
+  t.remove_subscription t;
+  close t;
+
+  if not all_msgs_processed then begin
+    SyncQueue.clear t.queue;
+    failwith "timeout"  (* TODO: better errors *)
+  end
+
 let signal_timeout t =
-  if not (is_sync t) then
-    failwith "signal_timeout should only be called for synchronous subscription";
   SyncQueue.signal_interrupt t.queue

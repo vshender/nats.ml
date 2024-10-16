@@ -41,6 +41,13 @@ module Subscription : sig
       message queue of the subscription [t]. *)
   val pending_msgs : t -> int
 
+  (** [next_msg ?timeout t] retrieves the next message for the synchronous
+      subscription [t], with an optional timeout (in seconds).
+
+      Raises [Failure] if called for an asynchronous subscription or if the
+      subscription is closed and there are no pending messages. *)
+  val next_msg : ?timeout:float -> t -> Message.t option
+
   (** [unsubscribe ?max_msgs t] unsubscribes from the subscription [t].
 
       If [max_msgs] is specified, the subscription will unsubscribe
@@ -49,12 +56,15 @@ module Subscription : sig
       Raises [Failure] if the subscription [t] is already closed. *)
   val unsubscribe : ?max_msgs:int -> t -> unit
 
-  (** [next_msg ?timeout t] retrieves the next message for the synchronous
-      subscription [t], with an optional timeout (in seconds).
+  (** [drain ?timeout t] unsubscribes the subscription [t] and waits for all
+      pending messages to be processed, with an optional timeout (in seconds).
 
-      Raises [Failure] if called for an asynchronous subscription or if the
-      subscription is closed and there are no pending messages. *)
-  val next_msg : ?timeout:float -> t -> Message.t option
+      If [timeout] is specified, the function will raise [Failure] if all
+      pending messages are not processed within the specified time limit.  In
+      this case the function also clears the internal message queue.
+
+      Raises [Failure] if the subscription [t] is already closed. *)
+  val drain : ?timeout:float -> t -> unit
 end
 
 (* A module containing a type of NATS message headers and functions for working

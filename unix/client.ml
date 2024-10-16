@@ -222,7 +222,7 @@ module Subscriptions = struct
   let add
       ?schedule_message_handling
       ?sync_op_started ?sync_op_finished
-      ~unsubscribe ~remove_subscription
+      ~flush ~unsubscribe ~remove_subscription
       t subject group callback
     =
     Mutex.protect t.mutex
@@ -232,7 +232,7 @@ module Subscriptions = struct
             t.ssid subject group callback
             ?schedule_message_handling
             ?sync_op_started ?sync_op_finished
-            ~unsubscribe ~remove_subscription
+            ~flush ~unsubscribe ~remove_subscription
         in
         Hashtbl.add t.subs (Subscription.sid sub) sub;
         sub
@@ -571,9 +571,12 @@ let msg_loop c =
   while is_running c do
     match SyncQueue.get ~interrupt_cond:should_stop c.msg_queue with
     | Some sub ->
-      let msg = Subscription.next_msg_internal sub in
-      let callback = Option.get @@ Subscription.callback sub in
-      callback msg
+      begin match Subscription.next_msg_internal sub with
+        | Some msg ->
+          let callback = Option.get @@ Subscription.callback sub in
+          callback msg
+        | None -> ()  (* message queue was cleared *)
+      end
     | None -> ()  (* interrupted *)
   done
 
@@ -633,6 +636,7 @@ let subscribe c ?group ?callback subject =
       ?schedule_message_handling
       ~sync_op_started:(sync_sub_op_started c)
       ~sync_op_finished:(sync_sub_op_finished c)
+      ~flush:(fun _sub ~timeout -> flush c ?timeout)
       ~unsubscribe:(unsubscribe c)
       ~remove_subscription:(Subscriptions.remove c.subscriptions)
   in

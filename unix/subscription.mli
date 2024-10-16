@@ -33,6 +33,7 @@ val create :
   ?schedule_message_handling : (t -> msg:Message.t -> unit) ->
   ?sync_op_started : (t -> timeout_time:float option -> unit) ->
   ?sync_op_finished : (t -> unit) ->
+  flush : (t -> timeout:float option -> unit) ->
   unsubscribe : (t -> unit) ->
   remove_subscription : (t -> unit) ->
   int -> string -> string option -> callback option -> t
@@ -78,14 +79,6 @@ val pending_msgs : t -> int
     messages. *)
 val close : t -> unit
 
-(** [unsubscribe ?max_msgs t] unsubscribes from the subscription [t].
-
-    If [max_msgs] is specified, the subscription will unsubscribe automatically
-    after receiving the specified number of messages.
-
-    Raises [Failure] if the subscription [t] is already closed. *)
-val unsubscribe : ?max_msgs:int -> t -> unit
-
 (** [handle_msg t msg] handles an incoming message [msg] for the subscription
     [t].  This function adds the message to the internal queue, and if an
     asynchronous callback is provided, schedules its handling based on the
@@ -94,13 +87,12 @@ val unsubscribe : ?max_msgs:int -> t -> unit
     Raises [Failure] if the subscription [t] is closed. *)
 val handle_msg : t -> Message.t -> unit
 
-(** [next_msg_internal t] retrieves the next message from the subscription's
-    internal queue.  If the queue is empty, the function blocks until a message
-    is available.
+(** [next_msg_internal t] attempts to retrieve the next message from the
+    subscription's internal queue.  If the queue is empty, it returns [None]
+    immediately.
 
-    This function is intended for internal use by the library and will only be
-    called when there are messages in the queue. *)
-val next_msg_internal : t -> Message.t
+    This function is intended for internal use by the library. *)
+val next_msg_internal : t -> Message.t option
 
 (** [next_msg ?timeout t] retrieves the next message for the synchronous
     subscription [t], with an optional timeout (in seconds).
@@ -108,6 +100,24 @@ val next_msg_internal : t -> Message.t
     Raises [Failure] if called for an asynchronous subscription or if the
     subscription is closed and there are no pending messages. *)
 val next_msg : ?timeout:float -> t -> Message.t option
+
+(** [unsubscribe ?max_msgs t] unsubscribes the subscription [t].
+
+    If [max_msgs] is specified, the subscription will unsubscribe automatically
+    after receiving the specified number of messages.
+
+    Raises [Failure] if the subscription [t] is already closed. *)
+val unsubscribe : ?max_msgs:int -> t -> unit
+
+(** [drain ?timeout t] unsubscribes the subscription [t] and waits for all
+    pending messages to be processed, with an optional timeout (in seconds).
+
+    If [timeout] is specified, the function will raise [Failure] if all pending
+    messages are not processed within the specified time limit.  In this case
+    the function also clears the internal message queue.
+
+    Raises [Failure] if the subscription [t] is already closed. *)
+val drain : ?timeout:float -> t -> unit
 
 (** [signal_timeout t] signals a timeout for the currently invoking synchronous
     operation on the subscription [t]. *)

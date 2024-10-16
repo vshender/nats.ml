@@ -35,6 +35,12 @@ val try_get : 'a t -> 'a option
     afterward, the function notifies any waiting threads about it. *)
 val get : ?interrupt_cond:(unit -> bool) -> 'a t -> 'a option
 
+(** [clear t] discards all elements from the message queue [t].
+
+    If the message queue was nonempty before clearing, the function notifies
+    any waiting threads that the message queue is now empty. *)
+val clear : 'a t -> unit
+
 (** [join ?interrupt_cond t] waits until the message queue [t] becomes empty.
     If the queue is nonempty, the function blocks until the queue is empty or
     the interrupt condition is met.

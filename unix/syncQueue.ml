@@ -50,6 +50,15 @@ let get ?interrupt_cond t =
       msg
     end
 
+let clear t =
+  Mutex.protect t.mutex
+    begin fun () ->
+      let was_empty = Queue.is_empty t.messages in
+      Queue.clear t.messages;
+      if not was_empty then
+        Condition.signal t.empty
+    end
+
 let join ?interrupt_cond t =
   let should_interrupt =
     Option.value interrupt_cond ~default:(Fun.const false) in
