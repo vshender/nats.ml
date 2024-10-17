@@ -569,14 +569,16 @@ let msg_loop c =
   let should_stop () = is_running c = false in
 
   while is_running c do
-    match SyncQueue.get ~interrupt_cond:should_stop c.msg_queue with
+    match SyncQueue.peek ~interrupt_cond:should_stop c.msg_queue with
     | Some sub ->
       begin match Subscription.next_msg_internal sub with
         | Some msg ->
           let callback = Option.get @@ Subscription.callback sub in
           callback msg
         | None -> ()  (* message queue was cleared *)
-      end
+      end;
+      (* Remove the processed subscription from the queue. *)
+      ignore @@ SyncQueue.try_get c.msg_queue
     | None -> ()  (* interrupted *)
   done
 

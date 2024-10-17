@@ -1,4 +1,4 @@
-(** A module for managing thread-safe queues. *)
+(** A module for managing thread-safe message queues. *)
 
 open Compat
 
@@ -27,6 +27,9 @@ let length t =
 let is_empty t =
   length t = 0
 
+let try_peek t =
+  Mutex.protect t.mutex (fun () -> Queue.peek_opt t.messages)
+
 let try_get t =
   Mutex.protect t.mutex
     begin fun () ->
@@ -34,6 +37,17 @@ let try_get t =
       if Option.is_some msg && Queue.is_empty t.messages then
         Condition.signal t.empty;
       msg
+    end
+
+let peek ?interrupt_cond t =
+  let should_interrupt =
+    Option.value interrupt_cond ~default:(Fun.const false) in
+  Mutex.protect t.mutex
+    begin fun () ->
+      while Queue.is_empty t.messages && not (should_interrupt ()) do
+        Condition.wait t.nonempty t.mutex
+      done;
+      Queue.peek_opt t.messages
     end
 
 let get ?interrupt_cond t =
