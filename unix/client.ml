@@ -312,10 +312,25 @@ module PendingRequest = struct
       end
 end
 
-(** The type of NATS connection. *)
+(** The type representing the state of the NATS connection. *)
+type state =
+  | Connected
+  (** [Connected] indicates that the client is successfully connected to the
+      server. *)
+  | Closing
+  (** [Closing] indicates that the client is in the process of closing the
+      connection.  This state tells the I/O and message processing threads to
+      stop working.  The client enters the [Closed] state only after completing
+      these threads. *)
+  | Closed
+  (** [Closed] indicates that the client connection is closed. *)
+
+(** The type of NATS client. *)
 type t = {
   mutex : Mutex.t;
   (** A mutex for synchronizing access to the connection state. *)
+  mutable state : state;
+  (** The client state. *)
   sock : file_descr;
   (** The socket file descriptor for the connection. *)
   in_buffer : Bytes.t;
@@ -342,8 +357,6 @@ type t = {
   (** The interval (in seconds) at which PING messages are sent. *)
   mutable next_ping_time : float;
   (** The time when the next PING should be sent. *)
-  mutable running : bool;
-  (** Indicates whether the client is running. *)
   mutable io_thread : Thread.t;
   (** The thread handling network I/O operations. *)
   mutable msg_thread : Thread.t;
@@ -357,19 +370,15 @@ type t = {
 let new_inbox c =
   Printf.sprintf "%s.%s" c.inbox_prefix (Nuid.State.next c.nuid)
 
-(** [is_running c] indicates if the client [c] is currently running.*)
-let is_running c =
-  Mutex.protect c.mutex (fun () -> c.running)
-
-(** [is_closed c] indicates if the client [c] is closed. *)
-let is_closed c =
-  not (is_running c)
+(** [state c] returns the state of the client [c]. *)
+let state c =
+  Mutex.protect c.mutex (fun () -> c.state)
 
 (** [send_msg c msg] sends a message [msg] to the server using the client [c].
 
     Raises [Failure] if the connection is closed. *)
 let send_msg c msg =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
 
   Mutex.protect c.mutex
@@ -384,7 +393,7 @@ let send_ping c =
   ping
 
 let flush ?timeout c =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
 
   let timeout_time =
@@ -403,10 +412,11 @@ let flush ?timeout c =
     end
 
 let close c =
-  Mutex.protect c.mutex (fun () -> c.running <- false);
+  Mutex.protect c.mutex (fun () -> c.state <- Closing);
   SyncQueue.signal_interrupt c.msg_queue;
   Thread.join c.io_thread;
-  Thread.join c.msg_thread
+  Thread.join c.msg_thread;
+  Mutex.protect c.mutex (fun () -> c.state <- Closed)
 
 (** [read_client_msg ?timeout c] reads the next message from the server for the
     client [c].  If a [timeout] is provided, the operation will fail if the
@@ -464,7 +474,7 @@ let rec io_loop c =
           end
       end
       begin fun () ->
-        while is_running c do
+        while state c = Connected do
           let iovec = Mutex.protect c.mutex
               begin fun () ->
                 match Faraday.operation c.serializer with
@@ -566,9 +576,9 @@ and dispatch_message c = function
     messages from the queue and invoking the appropriate subscription
     callbacks  *)
 let msg_loop c =
-  let should_stop () = is_running c = false in
+  let should_stop () = state c <> Connected in
 
-  while is_running c do
+  while state c = Connected do
     match SyncQueue.peek ~interrupt_cond:should_stop c.msg_queue with
     | Some sub ->
       begin match Subscription.next_msg_internal sub with
@@ -599,7 +609,7 @@ let schedule_message_handling c sub ~msg:_msg =
     [sub] using the client [c].  Raises [Failure] if the connection is
     closed. *)
 let unsubscribe c sub =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
 
   let unsub_msg = ClientMessage.UnSub
@@ -625,7 +635,7 @@ let sync_sub_op_finished c _sub =
   CurrentSyncOperation.finish c.cur_sync_op
 
 let subscribe c ?group ?callback subject =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
 
   let schedule_message_handling =
@@ -649,13 +659,13 @@ let subscribe c ?group ?callback subject =
   sub
 
 let publish c ?reply subject payload =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
   let pub_msg = ClientMessage.Pub (Pub.make ~subject ?reply ~payload ()) in
   send_msg c pub_msg
 
 let request c ?timeout subject payload =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
 
   let timeout_time =
@@ -682,7 +692,7 @@ let request c ?timeout subject payload =
     end
 
 let drain c =
-  if is_closed c then
+  if state c = Closed then
     failwith "connection closed";
 
   Subscriptions.iter c.subscriptions
@@ -730,6 +740,7 @@ let connect
 
   let conn = {
     mutex           = Mutex.create ();
+    state           = Connected;
     sock;
     in_buffer       = Bytes.create 0x1000;
     reader          = Reader.create ();
@@ -737,7 +748,6 @@ let connect
     subscriptions   = Subscriptions.create ();
     resp_sub_prefix = Printf.sprintf "%s.%s." inbox_prefix (Nuid.State.next nuid);
     cur_request     = None;
-    running         = true;
     io_thread       = Thread.self ();
     msg_thread      = Thread.self ();
     msg_queue       = SyncQueue.create ();
