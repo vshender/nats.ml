@@ -1,6 +1,6 @@
-(** A NATS client module. *)
+(** The NATS client module. *)
 
-(** The type of NATS connections. *)
+(** The type of NATS client. *)
 type t
 
 (** The type of callback functions for handling income messages *)

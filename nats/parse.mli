@@ -1,18 +1,19 @@
-(** Parsing of NATS client protocol messages sending by a server.
+(** Parsing of NATS client protocol messages produced by a server.
 
     See {{:https://docs.nats.io/reference/reference-protocols/nats-protocol} Client Protocol}
     for details.
 *)
 
-(** [server_message] parses a NATS client protocol message sending by server. *)
+(** [server_message] parses a NATS client protocol message produced by a
+    server. *)
 val server_message : Protocol.ServerMessage.t Angstrom.t
 
-(** A reader for NATS client protocol messages sending by a server. *)
+(** The reader for NATS client protocol messages produced by a server. *)
 module Reader : sig
-  (** The type of NATS messages readers. *)
+  (** The type representing a NATS messages reader. *)
   type t
 
-  (** A type representing the result of parsing a NATS message. *)
+  (** The type representing the result of parsing a NATS message. *)
   type result =
     | Message of Protocol.ServerMessage.t
     (** A successfully parsed NATS message. *)
@@ -21,7 +22,7 @@ module Reader : sig
     | Parse_error of string list * string
     (** A parsing error, with a list of parsing markers and an error message. *)
 
-  (** [create ?initial_buffer_size ()] creates a new NATS messages reader. *)
+  (** [create ?initial_buffer_size ()] creates a new NATS message reader. *)
   val create : ?initial_buffer_size:int -> unit -> t
 
   (** [next_msg reader] examines the current state of [reader] and returns the

@@ -1,4 +1,4 @@
-(** Serialization of NATS client protocol messages sending by a client. *)
+(** Serialization of NATS client protocol messages produced by a client. *)
 
 open Faraday
 

@@ -1,4 +1,4 @@
-# NUID
+# Nuid
 
 A highly performant unique identifier generator.
 

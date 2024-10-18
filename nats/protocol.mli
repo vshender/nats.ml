@@ -4,45 +4,46 @@
     for details.
 *)
 
-(** A module containing a type of NATS message headers and functions for
-    working with it. *)
+(** The NATS message headers module. *)
 module Headers : sig
-  (** A type of NATS message headers.
+  (** The type of NATS message headers.
 
       See {{:https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-4.md}NATS Message Headers}
       for details. *)
   type t = {
-    version: int * int;               (** header version *)
-    headers: (string * string) list;  (** headers themselves *)
+    version: int * int;               (** The header version. *)
+    headers: (string * string) list;  (** The headers themselves. *)
   }
 
-  (** [make] is a constructor for the [Headers.t] records. *)
+  (** [make ?version ?headers ()] creates a new headers record with an optional
+      [version] and [headers]. *)
   val make : ?version:int * int -> ?headers:(string * string) list -> unit -> t
 
-  (** [version headers] returns a header version. *)
+  (** [version t] returns the version of [t]. *)
   val version : t -> int * int
 
-  (** [get key headers] returns a first value found matching [key] in a
-      case-sensitive lookup in [headers].
+  (** [get key t] returns the first value found matching [key] in a
+      case-sensitive lookup in [t].
 
       Returns [None] if a matching [key] is not found.  *)
   val get : string -> t -> string option
 
-  (** [values key headers] returns a list of all values that case-sensitive
-      match [key] or an empty list. *)
+  (** [values key t] returns a list of all values that case-sensitive match
+      [key] in [t]. *)
   val values : string -> t -> string list
 
-  (** [iter f headers] applies [f] in turn to all elements of [headers]. *)
+  (** [iter f t] applies [f] in turn to each key-value pair in [t]. *)
   val iter : (string -> string -> unit) -> t -> unit
 
-  (** [fold f headers init] computes [(f kN vN ... (f k2 v2 (f k1 v1 init)) ...)],
-      where [(k1, v1), ..., (kN, vN)] are the elements of [headers].  Each
-      header is presented exactly once to [f]. *)
+  (** [fold f t init] computes [(f kN vN ... (f k2 v2 (f k1 v1 init)) ...)],
+      where [(k1, v1), ..., (kN, vN)] are the elements of [t].  Each header is
+      presented exactly once to [f]. *)
   val fold : (string -> string -> 'acc -> 'acc) -> t -> 'acc -> 'acc
 end
 
+(** The module representing the INFO message arguments. *)
 module Info : sig
-  (** A type of the INFO message argument. *)
+  (** The type of the INFO message argument. *)
   type t = {
     server_id : string;
     (** The unique identifier of the NATS server. *)
@@ -128,14 +129,13 @@ module Info : sig
     ?domain:string ->
     unit -> t
 
-  (** [of_yojson json] parses [Info.t] from a JSON representation. *)
+  (** [of_yojson json] parses [Info.t] from JSON. *)
   val of_yojson : Yojson.Safe.t -> (t, string) Result.t
 end
 
-(** A module containing a type of the CONNECT message argument and functions
-    for working with it. *)
+(** The module representing the CONNECT message arguments. *)
 module Connect : sig
-  (** A type of the CONNECT message argument. *)
+  (** The type of the CONNECT message argument. *)
   type t = {
     verbose : bool;
     (** Turns on [+OK] protocol acknowledgements. *)
@@ -207,29 +207,27 @@ module Connect : sig
   val to_yojson : t -> Yojson.Safe.t
 end
 
-(** A module containing a type of the PUB message arguments and functions for
-    working with it. *)
+(** The module representing the PUB message arguments. *)
 module Pub : sig
-  (** A type of the PUB message arguments.*)
+  (** The type of the PUB message arguments.*)
   type t = {
-    subject : string;         (** subject name *)
-    reply   : string option;  (** reply subject *)
-    payload : string;         (** message payload *)
+    subject : string;         (** The subject name. *)
+    reply   : string option;  (** An optional reply subject name. *)
+    payload : string;         (** The message payload *)
   }
 
   (** [make] is a constructor for the [Pub.t] records. *)
   val make : subject:string -> ?reply:string -> payload:string -> unit -> t
 end
 
-(** A module containing a type of the HPUB message arguments and functions for
-    working with it. *)
+(** The module representing the HPUB message arguments. *)
 module HPub : sig
-  (** A type of the HPUB message arguments. *)
+  (** The type of the HPUB message arguments. *)
   type t = {
-    subject : string;         (** subject name *)
-    reply   : string option;  (** reply subject *)
-    headers : Headers.t;      (** message headers *)
-    payload : string;         (** message payload *)
+    subject : string;         (** The subject name. *)
+    reply   : string option;  (** An optional reply subject name. *)
+    headers : Headers.t;      (** The message headers. *)
+    payload : string;         (** The message payload. *)
   }
 
   (** [make] is a constructor for the [HPub.t] records. *)
@@ -241,44 +239,42 @@ module HPub : sig
     unit -> t
 end
 
-(** A module containing a type of the SUB message arguments and functions for
-    working with it. *)
+(** The module representing the SUB message arguments. *)
 module Sub : sig
-  (** A type of the SUB message arguments. *)
+  (** The type of the SUB message arguments. *)
   type t = {
-    subject : string;         (** subject name *)
-    group   : string option;  (** queue group *)
-    sid     : string;         (** subscription ID *)
+    subject : string;         (** The subject name. *)
+    group   : string option;  (** An optional queue group. *)
+    sid     : string;         (** The subscription ID. *)
   }
 
   (** [make] is a constructor for the [Sub.t] records. *)
   val make : subject:string -> ?group:string -> sid:string -> unit -> t
 end
 
-(** A module containing a type of the UNSUB message arguments and functions for
-    working with it. *)
+(** The module representing the UNSUB message arguments. *)
 module UnSub : sig
-  (** A type of the UNSUB message arguments. *)
+  (** The type of the UNSUB message arguments. *)
   type t = {
-    sid      : string;
-    (** subscription ID *)
+    sid : string;
+    (** The subscription ID *)
     max_msgs : int option;
-    (** number of messages to wait for before automatically unsubscribing *)
+    (** The number of messages to wait for before automatically
+        unsubscribing. *)
   }
 
   (** [make] is a constructor for the [UnSub.t] records. *)
   val make : sid:string -> ?max_msgs:int -> unit -> t
 end
 
-(** A module containing a type of the MSG message arguments and functions for
-    working with it. *)
+(** The module representing the MSG message arguments. *)
 module Msg : sig
-  (** A type of the MSG message arguments. *)
+  (** The type of the MSG message arguments. *)
   type t = {
-    subject : string;         (** subject name *)
-    reply   : string option;  (** subject name for reply *)
-    sid     : string;         (** subscription ID *)
-    payload : string;         (** message payload *)
+    subject : string;         (** The subject name. *)
+    reply   : string option;  (** An optional reply subject name. *)
+    sid     : string;         (** The subscription ID. *)
+    payload : string;         (** The message payload. *)
   }
 
   (** [make] is a constructor for the [Msg.t] records. *)
@@ -290,16 +286,15 @@ module Msg : sig
     unit -> t
 end
 
-(** A module containing a type of the HMSG message arguments and functions for
-    working with it. *)
+(** The module represeenting the HMSG arguments. *)
 module HMsg : sig
-  (** A type of the HMSG message arguments. *)
+  (** The type of the HMSG message arguments. *)
   type t = {
-    subject : string;         (** subject name  *)
-    reply   : string option;  (** subject name for reply *)
-    sid     : string;         (** subscription ID *)
-    headers : Headers.t;      (** message headers *)
-    payload : string;         (** message payload *)
+    subject : string;         (** The subject name.  *)
+    reply   : string option;  (** An optional reply subject name. *)
+    sid     : string;         (** The subscription ID. *)
+    headers : Headers.t;      (** The message headers. *)
+    payload : string;         (** The message payload. *)
   }
 
   (** [make] is a constructor for the [HMsg.t] records. *)
@@ -312,10 +307,10 @@ module HMsg : sig
     unit -> t
 end
 
-(** A module containing a type of NATS client protocol messages sending by
-    a client and functions for working with it. *)
+(** The module representing the NATS client protocol messages produced by
+    a client. *)
 module ClientMessage : sig
-  (** A type of protocol messages sending by client. *)
+  (** The type of protocol messages produced by a client. *)
   type t =
     | Connect of Connect.t
     (** Sent to a server to specify connection information. *)
@@ -343,10 +338,10 @@ module ClientMessage : sig
   val show : t -> string
 end
 
-(** A module containing a type of NATS client protocol messages sending by
-    a server and functions for working with it. *)
+(** The module representing the NATS client protocol messages produced by
+    a server. *)
 module ServerMessage : sig
-  (** A type of protocol messages sending by server. *)
+  (** The type of protocol messages produced by a server. *)
   type t =
     | Info of Info.t
     (** Sent to a client after initial TCP/IP connection. *)

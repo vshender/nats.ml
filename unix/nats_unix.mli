@@ -2,7 +2,7 @@
 
 module Client = Client
 
-(** A module for managing NATS subscriptions. *)
+(** The module for managing NATS subscriptions. *)
 module Subscription : sig
   (** The type of NATS subscriptions. *)
   type t = Subscription.t
@@ -67,8 +67,7 @@ module Subscription : sig
   val drain : ?timeout:float -> t -> unit
 end
 
-(* A module containing a type of NATS message headers and functions for working
-   with it. *)
+(** The NATS message headers module. *)
 module Headers = Message.Headers
 
 module Message = Message

@@ -1,10 +1,10 @@
-(** Parsing of NATS client protocol messages sending by a server. *)
+(** Parsing of NATS client protocol messages produced by a server. *)
 
 open Angstrom
 
 open Protocol
 
-(** A module containing helper parsing functions. *)
+(** The module containing helper parsing functions. *)
 module P = struct
   (** [is_space c] is true if [c] is a whitespace character. *)
   let is_space = function

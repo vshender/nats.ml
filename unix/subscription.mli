@@ -1,4 +1,4 @@
-(** A module for managing NATS subscriptions.
+(** The module for managing NATS subscriptions.
 
     This module providing functionality for both synchronous and asynchronous
     message handling in a thread-safe manner.

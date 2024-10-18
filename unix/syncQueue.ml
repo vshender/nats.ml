@@ -1,8 +1,8 @@
-(** A module for managing thread-safe message queues. *)
+(** The module for managing thread-safe message queues. *)
 
 open Compat
 
-(** A type representing a thread-safe message queue. *)
+(** The type representing a thread-safe message queue. *)
 type 'a t = {
   messages : 'a Queue.t;
   (** A queue of pending messages. *)

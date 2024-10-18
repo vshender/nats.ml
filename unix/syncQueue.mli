@@ -1,4 +1,4 @@
-(** A module for managing thread-safe message queues.
+(** The module for managing thread-safe message queues.
 
     The [SyncQueue] module provides a thread-safe message queue that ensures
     safe access and modification across multiple threads.  It supports a
@@ -8,7 +8,7 @@
     processing.
 *)
 
-(** A type representing a thread-safe message queue. *)
+(** The type representing a thread-safe message queue. *)
 type 'a t
 
 (** [create ()] creates an empty message queue. *)

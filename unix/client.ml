@@ -1,4 +1,4 @@
-(** A NATS client module. *)
+(** The NATS client module. *)
 
 open Compat
 
@@ -19,16 +19,17 @@ let default_ping_interval = 120.  (* in seconds *)
 type callback = Subscription.callback
 type error_callback = exn -> unit
 
-(** A module to track unacknowledged PINGs and manage their acknowledgements. *)
+(** The module to track unacknowledged PINGs and manage their
+    acknowledgements. *)
 module PingPongTracker = struct
-  (** A type representing the possible outcomes of a PING. *)
+  (** The type representing the possible outcomes of a PING. *)
   type ping_result =
     | Acknowledged
     (** The PING has been successfully acknowledged with a PONG. *)
     | TimedOut
     (** The PING has timed out without receiving a PONG. *)
 
-  (** A type used to represent an individual PING that is awaiting
+  (** The type used to represent an individual PING that is awaiting
       acknowledgement. *)
   type ping = {
     mutable result : ping_result option;
@@ -60,7 +61,7 @@ module PingPongTracker = struct
         Condition.signal ping.condition
       end
 
-  (** A type representing the tracker for managing unacknowledged PINGs. *)
+  (** The type representing the tracker for managing unacknowledged PINGs. *)
   type t = {
     pings : ping Queue.t;  (** A queue to hold unacknowledged PINGs. *)
     mutex : Mutex.t;       (** A mutex to protect access to the PINGs queue. *)
@@ -98,12 +99,12 @@ module PingPongTracker = struct
       end
 end
 
-(** A module to manage the state of the current synchronous operation, ensuring
-    that only one synchronous operation is active at a time.  It also handles
-    timeouts by allowing a function to be called when the operation exceeds its
-    allotted time. *)
+(** The module to manage the state of the current synchronous operation,
+    ensuring that only one synchronous operation is active at a time.  It also
+    handles timeouts by allowing a function to be called when the operation
+    exceeds its allotted time. *)
 module CurrentSyncOperation = struct
-  (** A type representing a synchronous operation. *)
+  (** The type representing a synchronous operation. *)
   type sync_op = {
     thread_id : int;
     (** The ID of the thread that started the synchronous operation. *)
@@ -113,7 +114,7 @@ module CurrentSyncOperation = struct
     (** A function to call when the operation times out. *)
   }
 
-  (** A type representing the state of the current synchronous operation. *)
+  (** The type representing the state of the current synchronous operation. *)
   type t = {
     mutable cur_sync_op : sync_op option;
     (** The current synchronous operation, if any. *)
@@ -189,9 +190,9 @@ module CurrentSyncOperation = struct
       end
 end
 
-(** A module for managing active NATS subscriptions. *)
+(** The module for managing active NATS subscriptions. *)
 module Subscriptions = struct
-  (** A type representing a collection of active NATS subscriptions. *)
+  (** The type representing a collection of active NATS subscriptions. *)
   type t = {
     mutable ssid : int;
     (** A counter for generating unique subscription identifiers. *)
@@ -261,14 +262,14 @@ module Subscriptions = struct
     | None     -> ()
 end
 
-(** A module for managing pending requests and their results. *)
+(** The module for managing pending requests and their results. *)
 module PendingRequest = struct
-  (** A type representing results of a pending request. *)
+  (** The type representing results of a pending request. *)
   type result =
     | Response of Message.t  (** A successful response containing a message. *)
     | TimeOut                (** The request timed out without a response. *)
 
-  (** A type representing a pending request that waits for a result. *)
+  (** The type representing a pending request that waits for a result. *)
   type t = {
     inbox : string;
     (** The inbox subject for receiving the response. *)

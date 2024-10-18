@@ -1,4 +1,4 @@
-(** A module for managing NATS subscriptions. *)
+(** The module for managing NATS subscriptions. *)
 
 open Compat
 
