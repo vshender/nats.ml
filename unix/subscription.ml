@@ -173,28 +173,30 @@ let drain ?timeout t =
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
 
-  t.unsubscribe t;
-  t.flush t ~timeout;
+  Fun.protect
+    ~finally:begin fun () ->
+      t.remove_subscription t;
+      close t
+    end
+    begin fun () ->
+      t.unsubscribe t;
+      t.flush t ~timeout;
 
-  (* Calculate remaining execution time. *)
-  let timeout =
-    timeout_time
-    |> Option.map (fun timeout_time -> timeout_time -. Unix.gettimeofday ())
-  in
+      (* Calculate remaining execution time. *)
+      let timeout =
+        timeout_time
+        |> Option.map (fun timeout_time -> timeout_time -. Unix.gettimeofday ())
+      in
 
-  (* Wait until all pending messages are processed. *)
-  let all_msgs_processed =
-    with_sync_op ?timeout t
-      (fun interrupt_cond -> SyncQueue.join ?interrupt_cond t.queue)
-  in
-
-  t.remove_subscription t;
-  close t;
-
-  if not all_msgs_processed then begin
-    SyncQueue.clear t.queue;
-    failwith "timeout"  (* TODO: better errors *)
-  end
+      (* Wait until all pending messages are processed. *)
+      with_sync_op ?timeout t
+        begin fun interrupt_cond ->
+          if not (SyncQueue.join ?interrupt_cond t.queue) then begin
+            SyncQueue.clear t.queue;
+            failwith "timeout"  (* TODO: better errors *)
+          end
+        end
+    end
 
 let signal_timeout t =
   SyncQueue.signal_interrupt t.queue

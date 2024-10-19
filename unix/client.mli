@@ -22,7 +22,6 @@ type error_callback = exn -> unit
       (turned off by default).
     - [connect_timeout] (optional): specifies the connection timeout in
       seconds.
-    - [keepalive] (optional): whether to keep the connection alive.
     - [ing_interval] (optional): the period (in seconds) at which the client
       will be sending PING commands to the server.  Defaults to 120 seconds.
     - [error_cb] (optional): a callback function to report errors.
@@ -94,11 +93,14 @@ val request : t -> ?timeout:float -> string -> string -> Message.t option
     times out. *)
 val flush : ?timeout:float -> t -> unit
 
-(** [close t] closes the connection to the NATS server. *)
+(** [close t] closes the connection to the NATS server.
+
+    Raises [Failure] if the connection is already closed. *)
 val close : t -> unit
 
 (** [drain t] safely closes the connection after ensuring all buffered messages
     have been sent and processed by subscriptions.
 
-    Raises [Failure] if the connection is already closed. *)
-val drain : t -> unit
+    Raises [Failure] if the connection is already closed or if the drain
+    operation times out. *)
+val drain : ?timeout:float -> t -> unit

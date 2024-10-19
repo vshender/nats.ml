@@ -428,7 +428,7 @@ let flush ?timeout c =
   let ping = send_ping c in
   CurrentSyncOperation.with_sync_op
     c.cur_sync_op
-    ~timeout_time:timeout_time
+    ~timeout_time
     ~signal_timeout:(fun () ->
         PingPongTracker.resolve ping PingPongTracker.TimedOut)
     begin fun () ->
@@ -438,6 +438,9 @@ let flush ?timeout c =
     end
 
 let close c =
+  if state c = Closed then
+    failwith "connection closed";
+
   Mutex.protect c.mutex (fun () -> c.state <- Closing);
   SyncQueue.signal_interrupt c.msg_queue;
   Thread.join c.io_thread;
@@ -717,9 +720,19 @@ let request c ?timeout subject payload =
         end
     end
 
-let drain c =
+let drain ?timeout c =
   if state c = Closed then
     failwith "connection closed";
+
+  let timeout_time, timed_out =
+    match timeout with
+    | Some timeout ->
+      let timeout_time = Unix.gettimeofday () +. timeout in
+      let timed_out () = Unix.gettimeofday () > timeout_time in
+      Some timeout_time, Some timed_out
+    | None ->
+      None, None
+  in
 
   Subscriptions.iter c.subscriptions
     begin fun sub ->
@@ -728,9 +741,21 @@ let drain c =
       in
       send_msg c unsub_msg
     end;
-  flush c;
-  ignore (SyncQueue.join c.msg_queue);
-  close c
+
+  Fun.protect
+    ~finally:(fun () -> close c)
+    begin fun () ->
+      flush c ?timeout;
+
+      CurrentSyncOperation.with_sync_op
+        c.cur_sync_op
+        ~timeout_time
+        ~signal_timeout:(fun () -> SyncQueue.signal_interrupt c.msg_queue)
+        begin fun () ->
+          if not (SyncQueue.join c.msg_queue ?interrupt_cond:timed_out) then
+            failwith "timeout"  (* better errors *)
+        end
+    end
 
 let connect
     ?(url = default_url)
