@@ -33,9 +33,8 @@ val connect :
   ?name:string ->
   ?verbose:bool ->
   ?pedantic:bool ->
-  ?connect_timeout:float ->
-  ?keepalive:bool ->
   ?ping_interval:float ->
+  ?connect_timeout:float ->
   ?error_cb:error_callback ->
   ?inbox_prefix:string ->
   unit -> t

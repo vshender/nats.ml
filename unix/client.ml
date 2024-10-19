@@ -12,6 +12,11 @@ let client_name    = "nats.ml-unix"
 let client_lang    = "ocaml"
 let client_version = "0.0.1-dev"
 
+let default_hostname = "127.0.0.1"
+let default_port     = 4222
+
+let default_url = Printf.sprintf "nats://%s:%d" default_hostname default_port
+
 let default_inbox_prefix = "_INBOX"
 
 let default_ping_interval = 120.  (* in seconds *)
@@ -326,10 +331,34 @@ type state =
   | Closed
   (** [Closed] indicates that the client connection is closed. *)
 
+(** The NATS client configuration options. *)
+type options = {
+  url : string;
+  (** A NATS server URL to which the client will be connecting. *)
+  name : string;
+  (** An optional name label which will be sent to the server on CONNECT to
+      identify the client. *)
+  verbose : bool;
+  (** Signals the server to send an OK ack for commands successfully processed
+      by the server. *)
+  pedantic : bool;
+  (** Signals the server whether it should be doing further validation of
+      subjects. *)
+  ping_interval : float;
+  (** The interval (in seconds) at which the client will be sending PING
+      messages to the server.  Defaults to 2m.  *)
+  connect_timeout : float option;
+  (** The timeout for a connection operation to complete. *)
+  error_cb : error_callback;
+  (** A callback function to handle errors encountered during operation. *)
+}
+
 (** The type of NATS client. *)
 type t = {
   mutex : Mutex.t;
   (** A mutex for synchronizing access to the connection state. *)
+  options : options;
+  (** The client configuration options. *)
   mutable state : state;
   (** The client state. *)
   sock : file_descr;
@@ -354,8 +383,6 @@ type t = {
   (** The current pending request, if any. *)
   ping_pongs : PingPongTracker.t;
   (** Tracks unacknowledged PINGs. *)
-  ping_interval : float;
-  (** The interval (in seconds) at which PING messages are sent. *)
   mutable next_ping_time : float;
   (** The time when the next PING should be sent. *)
   mutable io_thread : Thread.t;
@@ -364,8 +391,6 @@ type t = {
   (** The thread handling message processing. *)
   msg_queue : Subscription.t SyncQueue.t;
   (** A queue of pending subscription messages. *)
-  error_cb : error_callback;
-  (** A callback function to handle errors encountered during operation. *)
 }
 
 let new_inbox c =
@@ -495,7 +520,7 @@ let rec io_loop c =
           if List.length readable > 0 then begin
             match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
             | 0 ->
-              c.error_cb (Failure "connection closed");
+              c.options.error_cb (Failure "connection closed");
               raise Close
             | n ->
               Mutex.protect c.mutex
@@ -512,7 +537,7 @@ let rec io_loop c =
                     iovec.Faraday.buffer iovec.off iovec.len
                 with
                 | 0 ->
-                  c.error_cb (Failure "connection failure");
+                  c.options.error_cb (Failure "connection failure");
                   raise Close
                 | n ->
                   Mutex.protect c.mutex
@@ -534,20 +559,20 @@ let rec io_loop c =
             | Reader.Need_input ->
               ()
             | Reader.Parse_error (_, msg) ->
-              c.error_cb (Failure msg);
+              c.options.error_cb (Failure msg);
               raise Close
           in msg_processing_loop ();
 
           (* PING/PONG *)
           if Unix.gettimeofday () >= c.next_ping_time then begin
             ignore @@ send_ping c;
-            c.next_ping_time <- c.next_ping_time +. c.ping_interval
+            c.next_ping_time <- c.next_ping_time +. c.options.ping_interval
           end
         done
       end
   with
   | Close -> ()
-  | exn -> c.error_cb exn
+  | exn -> c.options.error_cb exn
 
 (** [dispatch_message c msg] handles an incoming message [msg] from the server
     for the client [c]. *)
@@ -567,7 +592,7 @@ and dispatch_message c = function
   | ServerMessage.Info _ ->
     ()  (* TODO: handle updated info *)
   | ServerMessage.Err msg ->
-    c.error_cb (Failure msg)
+    c.options.error_cb (Failure msg)
   | ServerMessage.Ok -> ()
   | _ -> ()
 
@@ -708,31 +733,38 @@ let drain c =
   close c
 
 let connect
-    ?(url = "nats://127.0.0.1:4222")
+    ?(url = default_url)
     ?(name = client_name)
     ?(verbose = false)
     ?(pedantic = false)
-    ?connect_timeout
-    ?(keepalive = false)  (* ??? *)
     ?(ping_interval = default_ping_interval)
+    ?connect_timeout
     ?(error_cb = default_error_callback)
     ?(inbox_prefix = default_inbox_prefix)
     () =
-  let uri = Uri.of_string url in
-  let hostname = Uri.host uri |> Option.value ~default:"127.0.0.1"
-  and port = Uri.port uri |> Option.value ~default:4222 in
+  let options = {
+    url;
+    name;
+    verbose;
+    pedantic;
+    ping_interval;
+    connect_timeout;
+    error_cb;
+  } in
+
+  let uri = Uri.of_string options.url in
+  let hostname = Uri.host uri |> Option.value ~default:default_hostname
+  and port     = Uri.port uri |> Option.value ~default:default_port in
 
   let start_time = gettimeofday () in
   let time_remaining () =
     Option.map
       (fun timeout -> Float.max (timeout -. (gettimeofday () -. start_time)) 0.)
-      connect_timeout
+      options.connect_timeout
   in
 
   let sock = socket PF_INET SOCK_STREAM 0 in
   let _ = setsockopt sock TCP_NODELAY true in
-  if keepalive then
-    ignore (setsockopt sock SO_KEEPALIVE true);
 
   let addr = ADDR_INET (inet_addr_of_string hostname, port) in
   Socket.connect ?timeout:(time_remaining ()) sock addr;
@@ -741,24 +773,24 @@ let connect
 
   let conn = {
     mutex           = Mutex.create ();
+    options;
     state           = Connected;
     sock;
     in_buffer       = Bytes.create 0x1000;
     reader          = Reader.create ();
     serializer      = Faraday.create 0x1000;
+    nuid;
+    inbox_prefix;
+    resp_sub_prefix = Printf.sprintf
+        "%s.%s." inbox_prefix (Nuid.State.next nuid);
     subscriptions   = Subscriptions.create ();
-    resp_sub_prefix = Printf.sprintf "%s.%s." inbox_prefix (Nuid.State.next nuid);
+    cur_sync_op     = CurrentSyncOperation.create ();
     cur_request     = None;
+    ping_pongs      = PingPongTracker.create ();
+    next_ping_time  = Unix.gettimeofday () +. ping_interval;
     io_thread       = Thread.self ();
     msg_thread      = Thread.self ();
     msg_queue       = SyncQueue.create ();
-    ping_pongs      = PingPongTracker.create ();
-    ping_interval;
-    next_ping_time  = Unix.gettimeofday () +. ping_interval;
-    cur_sync_op     = CurrentSyncOperation.create ();
-    error_cb        = error_cb;
-    inbox_prefix;
-    nuid;
   } in
 
   let info = read_client_msg ?timeout:(time_remaining ()) conn in
@@ -769,21 +801,21 @@ let connect
     | _ -> assert false;
   end;
 
-  let connect = ClientMessage.Connect
+  let connect_msg = ClientMessage.Connect
       (Connect.make
-         ~name
+         ~name:options.name
          ~lang:client_lang
-         ~protocol:0
          ~version:client_version
-         ~verbose
-         ~pedantic
+         ~protocol:0
+         ~verbose:options.verbose
+         ~pedantic:options.pedantic
          ~tls_required:false
          ~echo:true
          ~no_responders:false
          ~headers:false
          ())
   in
-  send_msg conn connect;
+  send_msg conn connect_msg;
 
   let _ = subscribe conn (conn.resp_sub_prefix ^ "*")
       ~callback:begin fun msg ->
