@@ -25,7 +25,7 @@ let main () =
     try
       Subscription.drain sub ~timeout:2.;
     with
-      Failure _ -> Printf.printf "subscription draining timeout\n%!"
+      NatsError Timeout -> Printf.printf "subscription draining timeout\n%!"
   end;
 
   (* Close the connection to NATS.  [close] waits for the current message being

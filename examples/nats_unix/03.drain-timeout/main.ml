@@ -30,7 +30,7 @@ let main () =
     try
       Client.drain nc ~timeout:2.;
     with
-      Failure _ -> Printf.printf "connection draining timeout\n%!"
+      NatsError Timeout -> Printf.printf "connection draining timeout\n%!"
   end
 
 let () = main ()

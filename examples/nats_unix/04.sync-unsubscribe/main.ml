@@ -37,7 +37,7 @@ let main () =
   (* Try to get the next message after unsubscribe. *)
   Printf.printf "getting the next message after unsubscribe...\n%!";
   begin try ignore (Subscription.next_msg sub ~timeout:1.) with
-    | Failure e -> Printf.printf "%s\n%!" e  (* subscription is closed *)
+    | NatsError SubscriptionClosed -> Printf.printf "subscription is closed\n%!"
   end
 
 let () = main ()

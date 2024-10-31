@@ -8,6 +8,8 @@ open Nats.Parse
 open Nats.Serialize
 open Nats.Protocol
 
+open Errors
+
 let client_name    = "nats.ml-unix"
 let client_lang    = "ocaml"
 let client_version = "0.0.1-dev"
@@ -22,7 +24,6 @@ let default_inbox_prefix = "_INBOX"
 let default_ping_interval = 120.  (* in seconds *)
 
 type callback = Subscription.callback
-type error_callback = exn -> unit
 
 (** The module to track unacknowledged PINGs and manage their
     acknowledgements. *)
@@ -331,28 +332,6 @@ type state =
   | Closed
   (** [Closed] indicates that the client connection is closed. *)
 
-(** The NATS client configuration options. *)
-type options = {
-  url : string;
-  (** A NATS server URL to which the client will be connecting. *)
-  name : string;
-  (** An optional name label which will be sent to the server on CONNECT to
-      identify the client. *)
-  verbose : bool;
-  (** Signals the server to send an OK ack for commands successfully processed
-      by the server. *)
-  pedantic : bool;
-  (** Signals the server whether it should be doing further validation of
-      subjects. *)
-  ping_interval : float;
-  (** The interval (in seconds) at which the client will be sending PING
-      messages to the server.  Defaults to 2m.  *)
-  connect_timeout : float option;
-  (** The timeout for a connection operation to complete. *)
-  error_cb : error_callback;
-  (** A callback function to handle errors encountered during operation. *)
-}
-
 (** The type of NATS client. *)
 type t = {
   mutex : Mutex.t;
@@ -391,7 +370,41 @@ type t = {
   (** The thread handling message processing. *)
   msg_queue : Subscription.t SyncQueue.t;
   (** A queue of pending subscription messages. *)
+  mutable err : nats_error option;
+  (** The last error that occurred while using the client. *)
 }
+
+(** The NATS client configuration options. *)
+and options = {
+  url : string;
+  (** A NATS server URL to which the client will be connecting. *)
+  name : string;
+  (** An optional name label which will be sent to the server on CONNECT to
+      identify the client. *)
+  verbose : bool;
+  (** Signals the server to send an OK ack for commands successfully processed
+      by the server. *)
+  pedantic : bool;
+  (** Signals the server whether it should be doing further validation of
+      subjects. *)
+  ping_interval : float;
+  (** The interval (in seconds) at which the client will be sending PING
+      messages to the server.  Defaults to 2m.  *)
+  connect_timeout : float option;
+  (** The timeout for a connection operation to complete. *)
+  closed_cb : conn_callback;
+  (** A callback function that is called when the client is no longer connected
+      to a server. *)
+  error_cb : error_callback;
+  (** A callback function to report asynchronous errors. *)
+}
+
+and conn_callback = t -> unit
+
+and error_callback = t -> nats_error -> unit
+
+let last_error c =
+  Mutex.protect c.mutex (fun () -> c.err)
 
 let new_inbox c =
   Printf.sprintf "%s.%s" c.inbox_prefix (Nuid.State.next c.nuid)
@@ -402,10 +415,10 @@ let state c =
 
 (** [send_msg c msg] sends a message [msg] to the server using the client [c].
 
-    Raises [Failure] if the connection is closed. *)
+    Raises [NatsError ConnectionClosed] if the connection is closed. *)
 let send_msg c msg =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   Mutex.protect c.mutex
     (fun () -> serialize_client_message c.serializer msg)
@@ -420,7 +433,7 @@ let send_ping c =
 
 let flush ?timeout c =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
@@ -434,25 +447,65 @@ let flush ?timeout c =
     begin fun () ->
       match PingPongTracker.wait ping with
       | Acknowledged -> ()
-      | TimedOut     -> failwith "timeout"  (* TODO: better errors *)
+      | TimedOut     -> nats_error Timeout
     end
 
 let close c =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   Mutex.protect c.mutex (fun () -> c.state <- Closing);
+
   SyncQueue.signal_interrupt c.msg_queue;
   Thread.join c.io_thread;
   Thread.join c.msg_thread;
-  Mutex.protect c.mutex (fun () -> c.state <- Closed)
+
+  Mutex.protect c.mutex (fun () -> c.state <- Closed);
+
+  c.options.closed_cb c
+
+(** [close_from_io_thread c] closes the connection to the NATS server.
+
+    This function is intended to be called from the I/O thread in case of an
+    error.*)
+let close_from_io_thread c =
+  Mutex.protect c.mutex (fun () -> c.state <- Closing);
+
+  SyncQueue.signal_interrupt c.msg_queue;
+  Thread.join c.msg_thread;
+
+  Mutex.protect c.mutex (fun () -> c.state <- Closed);
+
+  c.options.closed_cb c
+
+(** [process_op_err c err] handles errors which occured while reading or
+    parsing the protocol. *)
+let process_op_err c err =
+  Mutex.protect c.mutex (fun () -> c.err <- Some err);
+  close_from_io_thread c
+
+(** [process_err c err_msg] handles error messages from the server. *)
+let process_err c err_msg =
+  let err = parse_server_err_msg err_msg in
+  match err with
+  | StaleConnection | MaxConnectionsExceeded -> process_op_err c err
+  | InvalidSubject | PermissionsViolation _ ->
+    Mutex.protect c.mutex (fun () -> c.err <- Some err);
+    c.options.error_cb c err
+  | _ ->
+    Mutex.protect c.mutex (fun () -> c.err <- Some err);
+    close_from_io_thread c
 
 (** [read_client_msg ?timeout c] reads the next message from the server for the
     client [c].  If a [timeout] is provided, the operation will fail if the
     timeout is exceeded.
 
-    Raises [Failure] if the connection is closed or if there is an error
-    parsing the message.*)
+    Raises
+
+    - [NatsError ConnectionClosed] if the connection is closed.
+    - [NatsError Timeout] if the reading times out.
+    - [NatsError (ProtocolError e)] if there is an error parsing the message.
+*)
 let read_client_msg ?timeout c =
   let start_time = gettimeofday () in
   let time_remaining () =
@@ -472,23 +525,24 @@ let read_client_msg ?timeout c =
         c.in_buffer 0 (Bytes.length c.in_buffer)
       |> begin function
         | 0 ->
-          close c;
-          failwith "connection closed"
+          nats_error ConnectionClosed;
         | n ->
           Reader.feed c.reader c.in_buffer 0 n;
           loop ()
       end
-    | Reader.Parse_error (_, msg) ->
-      failwith msg
+    | Reader.Parse_error (_, e) ->
+      nats_error (ProtocolError e)
   in
-  loop ()
+  try
+    loop ()
+  with Socket.Timed_out ->
+    nats_error Timeout
 
 (** [io_loop c] runs the I/O loop for the client [c], managing both incoming
     and outgoing messages. *)
 let rec io_loop c =
-  let exception Close in
   let select_timeout = 0.05 in
-
+  let exception Close of nats_error in
   try
     Fun.protect
       ~finally:begin fun () ->
@@ -499,7 +553,7 @@ let rec io_loop c =
             shutdown c.sock SHUTDOWN_ALL;
             Unix.close c.sock;
             Faraday.close c.serializer;
-            ignore (Faraday.drain c.serializer)
+            ignore @@ Faraday.drain c.serializer
           end
       end
       begin fun () ->
@@ -508,7 +562,7 @@ let rec io_loop c =
               begin fun () ->
                 match Faraday.operation c.serializer with
                 | `Writev (iovec :: _) -> Some iovec
-                | _                   -> None
+                | _                    -> None
               end
           in
 
@@ -523,8 +577,7 @@ let rec io_loop c =
           if List.length readable > 0 then begin
             match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
             | 0 ->
-              c.options.error_cb (Failure "connection closed");
-              raise Close
+              raise @@ Close ConnectionClosed
             | n ->
               Mutex.protect c.mutex
                 (fun () -> Reader.feed c.reader c.in_buffer 0 n)
@@ -540,8 +593,7 @@ let rec io_loop c =
                     iovec.Faraday.buffer iovec.off iovec.len
                 with
                 | 0 ->
-                  c.options.error_cb (Failure "connection failure");
-                  raise Close
+                  raise @@ Close ConnectionClosed
                 | n ->
                   Mutex.protect c.mutex
                     (fun () -> Faraday.shift c.serializer n)
@@ -561,9 +613,8 @@ let rec io_loop c =
               msg_processing_loop ()
             | Reader.Need_input ->
               ()
-            | Reader.Parse_error (_, msg) ->
-              c.options.error_cb (Failure msg);
-              raise Close
+            | Reader.Parse_error (_, e) ->
+              raise @@ Close (ProtocolError e)
           in msg_processing_loop ();
 
           (* PING/PONG *)
@@ -574,8 +625,11 @@ let rec io_loop c =
         done
       end
   with
-  | Close -> ()
-  | exn -> c.options.error_cb exn
+  | Close err ->
+    process_op_err c err
+  | exn ->
+    (* TODO: handle the error *)
+    raise exn
 
 (** [dispatch_message c msg] handles an incoming message [msg] from the server
     for the client [c]. *)
@@ -595,7 +649,7 @@ and dispatch_message c = function
   | ServerMessage.Info _ ->
     ()  (* TODO: handle updated info *)
   | ServerMessage.Err msg ->
-    c.options.error_cb (Failure msg)
+    process_err c msg
   | ServerMessage.Ok -> ()
   | _ -> ()
 
@@ -621,12 +675,10 @@ let msg_loop c =
     | None -> ()  (* interrupted *)
   done
 
-(** [default_error_callback exn] is the default callback for handling errors.
-    It prints the encountered exception to standard error. *)
-let default_error_callback exn =
-  Printf.fprintf
-    Stdlib.stderr
-    "NATS: encoutered error %s\n%!" (Printexc.to_string exn)
+(** [default_error_callback] is the default callback for handling errors.
+    It prints the encountered error to standard error. *)
+let default_error_callback _c err =
+  Printf.fprintf Stdlib.stderr "nats error: %s\n%!" (error_message err)
 
 (** [schedule_message_handling c sub ~msg] schedules a message from the
     subscription [sub] to be processed by adding it to the client's message
@@ -635,11 +687,12 @@ let schedule_message_handling c sub ~msg:_msg =
   SyncQueue.put c.msg_queue sub
 
 (** [unsubscribe c sub] sends an UNSUB message to unsubscribe the subscription
-    [sub] using the client [c].  Raises [Failure] if the connection is
-    closed. *)
+    [sub] using the client [c].
+
+    Raises [NatsError ConnectionClosed] if the connection is closed. *)
 let unsubscribe c sub =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   let unsub_msg = ClientMessage.UnSub
       (UnSub.make
@@ -665,7 +718,7 @@ let sync_sub_op_finished c _sub =
 
 let subscribe c ?group ?callback subject =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   let schedule_message_handling =
     match callback with
@@ -689,13 +742,14 @@ let subscribe c ?group ?callback subject =
 
 let publish c ?reply subject payload =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
+
   let pub_msg = ClientMessage.Pub (Pub.make ~subject ?reply ~payload ()) in
   send_msg c pub_msg
 
 let request c ?timeout subject payload =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
@@ -722,7 +776,7 @@ let request c ?timeout subject payload =
 
 let drain ?timeout c =
   if state c = Closed then
-    failwith "connection closed";
+    nats_error ConnectionClosed;
 
   let timeout_time, timed_out =
     match timeout with
@@ -752,8 +806,10 @@ let drain ?timeout c =
         ~timeout_time
         ~signal_timeout:(fun () -> SyncQueue.signal_interrupt c.msg_queue)
         begin fun () ->
-          if not (SyncQueue.join c.msg_queue ?interrupt_cond:timed_out) then
-            failwith "timeout"  (* better errors *)
+          if not (SyncQueue.join c.msg_queue ?interrupt_cond:timed_out) then begin
+            SyncQueue.clear c.msg_queue;
+            nats_error Timeout
+          end
         end
     end
 
@@ -764,6 +820,7 @@ let connect
     ?(pedantic = false)
     ?(ping_interval = default_ping_interval)
     ?connect_timeout
+    ?(closed_cb = Fun.const ())
     ?(error_cb = default_error_callback)
     ?(inbox_prefix = default_inbox_prefix)
     () =
@@ -774,6 +831,7 @@ let connect
     pedantic;
     ping_interval;
     connect_timeout;
+    closed_cb;
     error_cb;
   } in
 
@@ -792,7 +850,12 @@ let connect
   let _ = setsockopt sock TCP_NODELAY true in
 
   let addr = ADDR_INET (inet_addr_of_string hostname, port) in
-  Socket.connect ?timeout:(time_remaining ()) sock addr;
+  begin
+    try
+      Socket.connect ?timeout:(time_remaining ()) sock addr
+    with Unix_error(ECONNREFUSED, _, _) ->
+      nats_error NoServers
+  end;
 
   let nuid = Nuid.State.create () in
 
@@ -816,44 +879,53 @@ let connect
     io_thread       = Thread.self ();
     msg_thread      = Thread.self ();
     msg_queue       = SyncQueue.create ();
+    err             = None;
   } in
 
-  let info = read_client_msg ?timeout:(time_remaining ()) conn in
-  begin match info with
-    | ServerMessage.Info info ->
-      if info.Info.tls_required then
-        failwith "client doensn't support TLS";
-    | _ -> assert false;
+  begin
+    try
+      let info = read_client_msg conn ?timeout:(time_remaining ()) in
+      begin match info with
+        | ServerMessage.Info info ->
+          if info.Info.tls_required then
+            failwith "client doensn't support TLS";
+        | _ -> assert false;  (* TODO: handle the error *)
+      end;
+
+      let connect_msg = ClientMessage.Connect
+          (Connect.make
+             ~name:options.name
+             ~lang:client_lang
+             ~version:client_version
+             ~protocol:0
+             ~verbose:options.verbose
+             ~pedantic:options.pedantic
+             ~tls_required:false
+             ~echo:true
+             ~no_responders:false
+             ~headers:false
+             ())
+      in
+      send_msg conn connect_msg;
+
+      ignore @@ subscribe conn (conn.resp_sub_prefix ^ "*")
+        ~callback:begin fun msg ->
+          Mutex.protect conn.mutex
+            begin fun () ->
+              let req = conn.cur_request in
+              match req with
+              | Some req when msg.subject = req.inbox ->
+                PendingRequest.(resolve req (Response msg))
+              | _ -> ()
+            end
+        end
+    with exn ->
+      conn.state <- Closed;
+      shutdown conn.sock SHUTDOWN_ALL;
+      Unix.close conn.sock;
+      Faraday.close conn.serializer;
+      raise exn
   end;
-
-  let connect_msg = ClientMessage.Connect
-      (Connect.make
-         ~name:options.name
-         ~lang:client_lang
-         ~version:client_version
-         ~protocol:0
-         ~verbose:options.verbose
-         ~pedantic:options.pedantic
-         ~tls_required:false
-         ~echo:true
-         ~no_responders:false
-         ~headers:false
-         ())
-  in
-  send_msg conn connect_msg;
-
-  let _ = subscribe conn (conn.resp_sub_prefix ^ "*")
-      ~callback:begin fun msg ->
-        Mutex.protect conn.mutex
-          begin fun () ->
-            let req = conn.cur_request in
-            match req with
-            | Some req when msg.subject = req.inbox ->
-              PendingRequest.(resolve req (Response msg))
-            | _ -> ()
-          end
-      end
-  in
 
   conn.io_thread  <- Thread.create io_loop conn;
   conn.msg_thread <- Thread.create msg_loop conn;

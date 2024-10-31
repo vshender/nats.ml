@@ -1,5 +1,7 @@
 (** A [Unix] library based client for NATS. *)
 
+include Errors
+
 module Headers = Message.Headers
 
 module Message = Message

@@ -27,8 +27,8 @@ type callback = Message.t -> unit
     - [sync_op_finished]: an optional callback invoked when a synchronous
       operation finishes.
 
-    Raises [Failure] if [schedule_message_handling] is provided for a
-    synchronous subscription. *)
+    Raises [NatsError AsyncSubRequired] if [schedule_message_handling] is
+    provided for a synchronous subscription. *)
 val create :
   ?schedule_message_handling : (t -> msg:Message.t -> unit) ->
   ?sync_op_started : (t -> timeout_time:float option -> unit) ->
@@ -84,7 +84,7 @@ val close : t -> unit
     asynchronous callback is provided, schedules its handling based on the
     provided scheduling function.
 
-    Raises [Failure] if the subscription [t] is closed. *)
+    Raises [NatsError SubscriptionClosed] if the subscription [t] is closed. *)
 val handle_msg : t -> Message.t -> unit
 
 (** [next_msg_internal t] attempts to retrieve the next message from the
@@ -97,8 +97,12 @@ val next_msg_internal : t -> Message.t option
 (** [next_msg ?timeout t] retrieves the next message for the synchronous
     subscription [t], with an optional timeout (in seconds).
 
-    Raises [Failure] if called for an asynchronous subscription or if the
-    subscription is closed and there are no pending messages. *)
+    Raises
+
+    - [NatsError SyncSubRequired] if called for an asynchronous subscription.
+    - [NatsError SubscriptionClosed] if the subscription is closed and there
+      are no pending messages.
+*)
 val next_msg : ?timeout:float -> t -> Message.t option
 
 (** [unsubscribe ?max_msgs t] unsubscribes the subscription [t].
@@ -106,17 +110,23 @@ val next_msg : ?timeout:float -> t -> Message.t option
     If [max_msgs] is specified, the subscription will unsubscribe automatically
     after receiving the specified number of messages.
 
-    Raises [Failure] if the subscription [t] is already closed. *)
+    Raises [NatsError SubscriptionClosed] if the subscription [t] is already
+    closed. *)
 val unsubscribe : ?max_msgs:int -> t -> unit
 
 (** [drain ?timeout t] unsubscribes the subscription [t] and waits for all
     pending messages to be processed, with an optional timeout (in seconds).
 
-    If [timeout] is specified, the function will raise [Failure] if all pending
-    messages are not processed within the specified time limit.  In this case
-    the function also clears the internal message queue.
+    If [timeout] is specified, the function will raise an exception if all
+    pending messages are not processed within the specified time limit.  In
+    this case the function also clears the internal message queue.
 
-    Raises [Failure] if the subscription [t] is already closed. *)
+    Raises
+
+    - [NatsError SubscriptionClosed] if the subscription [t] is already closed.
+    - [NatsError AsyncSubRequired] if the subscription [t] is synchronous.
+    - [NatsError Timeout] if the drain operation times out.
+*)
 val drain : ?timeout:float -> t -> unit
 
 (** [signal_timeout t] signals a timeout for the currently invoking synchronous

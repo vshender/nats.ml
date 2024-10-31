@@ -2,6 +2,8 @@
 
 open Compat
 
+open Errors
+
 type callback = Message.t -> unit
 
 (** The type of NATS subscriptions. *)
@@ -48,7 +50,7 @@ let create
     ~flush ~unsubscribe ~remove_subscription
     sid subject group callback =
   if Option.is_none callback && Option.is_some schedule_message_handling then
-    failwith "cannot use schedule_message_handling with synchronous subscriptions";
+    nats_error AsyncSubRequired;
   {
     sid;
     subject;
@@ -95,7 +97,7 @@ let close t =
 
 let handle_msg t msg =
   if is_closed t then
-    failwith "subscription is closed";
+    nats_error SubscriptionClosed;
 
   SyncQueue.put t.queue msg;
 
@@ -140,16 +142,16 @@ let with_sync_op ?timeout t f =
 
 let next_msg ?timeout t =
   if not (is_sync t) then
-    failwith "next_msg is only valid for synchronous subscriptions";
+    nats_error SyncSubRequired;
   if is_closed t && SyncQueue.is_empty t.queue then
-    failwith "subscription is closed";
+    nats_error SubscriptionClosed;
 
   with_sync_op ?timeout t
     (fun interrupt_cond -> SyncQueue.get ?interrupt_cond t.queue)
 
 let unsubscribe ?max_msgs t =
   if is_closed t then
-    failwith "subscription is closed";
+    nats_error SubscriptionClosed;
 
   let remove_sub =
     Mutex.protect t.mutex
@@ -166,9 +168,9 @@ let unsubscribe ?max_msgs t =
 
 let drain ?timeout t =
   if is_sync t then
-    failwith "drain is only valid for asynchronous subscriptions";
+    nats_error AsyncSubRequired;
   if is_closed t then
-    failwith "subscription is closed";
+    nats_error SubscriptionClosed;
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
@@ -193,7 +195,7 @@ let drain ?timeout t =
         begin fun interrupt_cond ->
           if not (SyncQueue.join ?interrupt_cond t.queue) then begin
             SyncQueue.clear t.queue;
-            failwith "timeout"  (* TODO: better errors *)
+            nats_error Timeout
           end
         end
     end
