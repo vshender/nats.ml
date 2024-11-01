@@ -42,6 +42,8 @@ type error_callback = t -> nats_error -> unit
     - [NatsError ConnectionClosed] if the connection was closed while the
       connection was being established.
     - [NatsError Timeout] if the connection times out.
+    - [NatsError NoInfoReceived] if no INFO message was received from the
+      server.
     - [NatsError (ProtocolError e)] if there was an error parsing a server
       message.
 *)

@@ -1,5 +1,7 @@
 (** NATS errors. *)
 
+open Nats.Protocol
+
 type nats_error =
   | NoServers
   | ConnectionClosed
@@ -7,6 +9,8 @@ type nats_error =
   | SyncSubRequired
   | AsyncSubRequired
   | Timeout
+  | NoInfoReceived
+  | UnexpectedProtocol of ServerMessage.t
   | ProtocolError of string
   | InvalidSubject
   | StaleConnection
@@ -25,6 +29,8 @@ let error_message = function
   | SyncSubRequired              -> "illegal call on an async subscription"
   | AsyncSubRequired             -> "illegal call on a sync subscription"
   | Timeout                      -> "timeout"
+  | NoInfoReceived               -> "no info received"
+  | UnexpectedProtocol msg       -> Printf.sprintf "unexpected protocol: %s" @@ ServerMessage.show msg
   | ProtocolError e              -> Printf.sprintf "protocol error: %s" e
   | InvalidSubject               -> "invalid subject"
   | StaleConnection              -> "stale connection"

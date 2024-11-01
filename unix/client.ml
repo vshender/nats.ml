@@ -413,7 +413,18 @@ let new_inbox c =
 let state c =
   Mutex.protect c.mutex (fun () -> c.state)
 
-(** [send_msg c msg] sends a message [msg] to the server using the client [c].
+(** [send_msg_direct c msg] serializes the given message [msg] and sends it
+    directly to the server by writing it to the client's socket.  This function
+    blocks the current thread until the message is successfully sent. *)
+let send_msg_direct c msg =
+  let serializer = Faraday.create 0x100 in
+  serialize_client_message serializer msg;
+  let data = Faraday.serialize_to_bigstring serializer in
+  ignore @@ write_bigarray c.sock data 0 (Bigstringaf.length data)
+
+(** [send_msg c msg] serializes the given message [msg] and enqueues it for
+    sending by the I/O thread, which ensures asynchronous, non-blocking
+    delivery of messages to the server.
 
     Raises [NatsError ConnectionClosed] if the connection is closed. *)
 let send_msg c msg =
@@ -496,6 +507,18 @@ let process_err c err_msg =
     Mutex.protect c.mutex (fun () -> c.err <- Some err);
     close_from_io_thread c
 
+(** [remaining_time_fn timeout] returns a function that calculates the time
+    remaining from the given [timeout] in seconds.
+
+    The returned function returns [None] if no timeout was specified, or the
+    remaining time otherwise. *)
+let remaining_time_fn timeout =
+  let start_time = gettimeofday () in
+  fun () ->
+    Option.map
+      (fun timeout -> Float.max (timeout -. (gettimeofday () -. start_time)) 0.)
+      timeout
+
 (** [read_client_msg ?timeout c] reads the next message from the server for the
     client [c].  If a [timeout] is provided, the operation will fail if the
     timeout is exceeded.
@@ -507,12 +530,7 @@ let process_err c err_msg =
     - [NatsError (ProtocolError e)] if there is an error parsing the message.
 *)
 let read_client_msg ?timeout c =
-  let start_time = gettimeofday () in
-  let time_remaining () =
-    Option.map
-      (fun timeout -> Float.max (timeout -. (gettimeofday () -. start_time)) 0.)
-      timeout
-  in
+  let remaining_time = remaining_time_fn timeout in
 
   let rec loop () =
     match Reader.next_msg c.reader with
@@ -520,7 +538,7 @@ let read_client_msg ?timeout c =
       msg
     | Reader.Need_input ->
       Socket.read
-        ?timeout:(time_remaining ())
+        ?timeout:(remaining_time ())
         c.sock
         c.in_buffer 0 (Bytes.length c.in_buffer)
       |> begin function
@@ -813,10 +831,54 @@ let drain ?timeout c =
         end
     end
 
+(** [process_expected_info ?timeout c] looks for the expected first INFO
+    message sent when a connection is established. *)
+let process_expected_info ?timeout c =
+  let info = read_client_msg c ?timeout in
+  match info with
+  | ServerMessage.Info info ->
+    if info.Info.tls_required then
+      failwith "client doensn't support TLS";
+  | _ -> nats_error NoInfoReceived
+
+(** [send_connect ?timeout c] sends a CONNECT protocol message to the server
+    and waits for a flush to return from the server for error processing. *)
+let send_connect ?timeout c =
+  let remaining_time = remaining_time_fn timeout in
+
+  let connect_msg = ClientMessage.Connect
+      (Connect.make
+         ~name:c.options.name
+         ~lang:client_lang
+         ~version:client_version
+         ~protocol:0
+         ~verbose:c.options.verbose
+         ~pedantic:c.options.pedantic
+         ~tls_required:false
+         ~echo:true
+         ~no_responders:false
+         ~headers:false
+         ())
+  in
+  send_msg_direct c connect_msg;
+
+  send_msg_direct c ClientMessage.Ping;
+  let msg = read_client_msg c ?timeout:(remaining_time ()) in
+  let msg =
+    if c.options.verbose && msg = ServerMessage.Ok then
+      read_client_msg c ?timeout:(remaining_time ())
+    else
+      msg
+  in
+  match msg with
+  | ServerMessage.Pong    -> ()
+  | ServerMessage.Err msg -> nats_error (parse_server_err_msg msg)
+  | _                     -> nats_error (UnexpectedProtocol msg)
+
 let connect
     ?(url = default_url)
     ?(name = client_name)
-    ?(verbose = false)
+    ?(verbose = true)
     ?(pedantic = false)
     ?(ping_interval = default_ping_interval)
     ?connect_timeout
@@ -839,12 +901,7 @@ let connect
   let hostname = Uri.host uri |> Option.value ~default:default_hostname
   and port     = Uri.port uri |> Option.value ~default:default_port in
 
-  let start_time = gettimeofday () in
-  let time_remaining () =
-    Option.map
-      (fun timeout -> Float.max (timeout -. (gettimeofday () -. start_time)) 0.)
-      options.connect_timeout
-  in
+  let remaining_time = remaining_time_fn options.connect_timeout in
 
   let sock = socket PF_INET SOCK_STREAM 0 in
   let _ = setsockopt sock TCP_NODELAY true in
@@ -852,13 +909,12 @@ let connect
   let addr = ADDR_INET (inet_addr_of_string hostname, port) in
   begin
     try
-      Socket.connect ?timeout:(time_remaining ()) sock addr
+      Socket.connect ?timeout:(remaining_time ()) sock addr
     with Unix_error(ECONNREFUSED, _, _) ->
       nats_error NoServers
   end;
 
   let nuid = Nuid.State.create () in
-
   let conn = {
     mutex           = Mutex.create ();
     options;
@@ -884,29 +940,8 @@ let connect
 
   begin
     try
-      let info = read_client_msg conn ?timeout:(time_remaining ()) in
-      begin match info with
-        | ServerMessage.Info info ->
-          if info.Info.tls_required then
-            failwith "client doensn't support TLS";
-        | _ -> assert false;  (* TODO: handle the error *)
-      end;
-
-      let connect_msg = ClientMessage.Connect
-          (Connect.make
-             ~name:options.name
-             ~lang:client_lang
-             ~version:client_version
-             ~protocol:0
-             ~verbose:options.verbose
-             ~pedantic:options.pedantic
-             ~tls_required:false
-             ~echo:true
-             ~no_responders:false
-             ~headers:false
-             ())
-      in
-      send_msg conn connect_msg;
+      process_expected_info conn ?timeout:(remaining_time ());
+      send_connect conn ?timeout:(remaining_time ());
 
       ignore @@ subscribe conn (conn.resp_sub_prefix ^ "*")
         ~callback:begin fun msg ->
@@ -920,7 +955,6 @@ let connect
             end
         end
     with exn ->
-      conn.state <- Closed;
       shutdown conn.sock SHUTDOWN_ALL;
       Unix.close conn.sock;
       Faraday.close conn.serializer;
