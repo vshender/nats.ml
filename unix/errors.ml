@@ -5,6 +5,7 @@ open Nats.Protocol
 type nats_error =
   | NoServers
   | ConnectionClosed
+  | ConnectionLost
   | SubscriptionClosed
   | SyncSubRequired
   | AsyncSubRequired
@@ -25,6 +26,7 @@ type nats_error =
 let error_message = function
   | NoServers                    -> "no servers available for connection"
   | ConnectionClosed             -> "connection closed"
+  | ConnectionLost               -> "connection lost"
   | SubscriptionClosed           -> "subscription closed"
   | SyncSubRequired              -> "illegal call on an async subscription"
   | AsyncSubRequired             -> "illegal call on a sync subscription"

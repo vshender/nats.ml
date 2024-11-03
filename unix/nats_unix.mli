@@ -48,17 +48,22 @@ module Subscription : sig
   val pending_msgs : t -> int
 
   (** [next_msg ?timeout t] retrieves the next message for the synchronous
-      subscription [t], with an optional timeout (in seconds).
+      subscription [t], with an optional timeout (in seconds).  If there are no
+      pending messages in the subscription's internal message queue, the
+      function blocks until a message arrives or the timeout expires (if
+      specified).  Returns [None] if no message is available after the timeout.
 
-      Raises
+    Raises:
 
-      - [NatsError SyncSubRequired] if called for an asynchronous subscription.
-      - [NatsError SubscriptionClosed] if the subscription is closed and there
-        are no pending messages.
+    - [NatsError SyncSubRequired] if called on an asynchronous subscription.
+    - [NatsError SubscriptionClosed] if the subscription is closed and there
+      are no pending messages.
+    - [NatsError ConnectionLost] if the connection is lost during the
+      operation.
   *)
   val next_msg : ?timeout:float -> t -> Message.t option
 
-  (** [unsubscribe ?max_msgs t] unsubscribes the subscription [t].
+  (** [unsubscribe ?max_msgs t] unsubscribes the subscription [t].e
 
       If [max_msgs] is specified, the subscription will unsubscribe
       automatically after receiving the specified number of messages.
@@ -74,11 +79,13 @@ module Subscription : sig
       pending messages are not processed within the specified time limit.  In
       this case the function also clears the internal message queue.
 
-      Raises
+      Raises:
 
+      - [NatsError AsyncSubRequired] if the subscription [t] is synchronous.
       - [NatsError SubscriptionClosed] if the subscription [t] is already
         closed.
-      - [NatsError AsyncSubRequired] if the subscription [t] is synchronous.
+      - [NatsError ConnectionLost] if the connection is lost during the
+        operation.
       - [NatsError Timeout] if the drain operation times out.
   *)
   val drain : ?timeout:float -> t -> unit

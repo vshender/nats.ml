@@ -5,7 +5,8 @@ open Nats.Protocol
 (** The type of NATS errors. *)
 type nats_error =
   | NoServers                              (** No servers available for connection. *)
-  | ConnectionClosed                       (** Connection closed. *)
+  | ConnectionClosed                       (** Attempt to perform an operation on a closed connection. *)
+  | ConnectionLost                         (** Connection lost during an ongoing operation. *)
   | SubscriptionClosed                     (** Subscription closed. *)
   | SyncSubRequired                        (** Illegal call on an async subscription. *)
   | AsyncSubRequired                       (** Illegal call on a sync subscription. *)

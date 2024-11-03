@@ -9,7 +9,7 @@ type callback = Message.t -> unit
 (** The type of NATS subscriptions. *)
 type t = {
   sid : int;
-  (** The subscription identifier. *)
+  (** The unique subscription identifier. *)
   subject : string;
   (** The subject to which the subscription is subscribed. *)
   group : string option;
@@ -31,14 +31,17 @@ type t = {
   (** A mutex for thread-safe access to the subscription state. *)
 
   flush : t -> timeout:float option -> unit;
-  (** A function to perform a flush. *)
+  (** A function to flush pending operations. *)
   unsubscribe : t -> unit;
-  (** A function to perform an unsubscription. *)
+  (** A function to perform unsubscription. *)
   remove_subscription : t -> unit;
   (** A function to deregister the subscription. *)
   schedule_message_handling : (t -> msg:Message.t -> unit) option;
   (** An optional function to schedule asynchronous message handling. *)
-  sync_op_started : (t -> timeout_time:float option -> unit) option;
+  sync_op_started : (t ->
+                     signal_interrupt:(nats_error -> unit) ->
+                     timeout_time:float option ->
+                     unit) option;
   (** An optional callback invoked when a synchronous operation starts. *)
   sync_op_finished : (t -> unit) option;
   (** An optional callback invoked when a synchronous operation finishes. *)
@@ -55,7 +58,7 @@ let create
     sid;
     subject;
     group;
-    queue = SyncQueue.create ();
+    queue     = SyncQueue.create ();
     callback;
     closed    = false;
     delivered = 0;
@@ -126,19 +129,18 @@ let next_msg_internal t =
 (** [with_sync_op ?timeout t f] wraps a synchronous operation on the
     subscription [t], optionally specifying a timeout. *)
 let with_sync_op ?timeout t f =
-  let timeout_time, timed_out =
-    match timeout with
-    | Some timeout ->
-      let timeout_time = Unix.gettimeofday () +. timeout in
-      let timed_out () = Unix.gettimeofday () > timeout_time in
-      Some timeout_time, Some timed_out
-    | None ->
-      None, None
+  let sync_op_err = ref None in
+  let interrupt_cond () = Option.is_some !sync_op_err
+  and signal_interrupt err =
+    sync_op_err := Some err;
+    SyncQueue.signal_interrupt t.queue
+  and timeout_time =
+    timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout)
   in
-  t.sync_op_started |> Option.iter (fun cb -> cb t ~timeout_time);
+  t.sync_op_started |> Option.iter (fun cb -> cb t ~signal_interrupt ~timeout_time);
   Fun.protect
     ~finally:(fun () -> t.sync_op_finished |> Option.iter (fun cb -> cb t))
-    (fun () -> f timed_out)
+    (fun () -> f interrupt_cond)
 
 let next_msg ?timeout t =
   if not (is_sync t) then
@@ -147,7 +149,7 @@ let next_msg ?timeout t =
     nats_error SubscriptionClosed;
 
   with_sync_op ?timeout t
-    (fun interrupt_cond -> SyncQueue.get ?interrupt_cond t.queue)
+    (fun interrupt_cond -> SyncQueue.get ~interrupt_cond t.queue)
 
 let unsubscribe ?max_msgs t =
   if is_closed t then
@@ -193,12 +195,9 @@ let drain ?timeout t =
       (* Wait until all pending messages are processed. *)
       with_sync_op ?timeout t
         begin fun interrupt_cond ->
-          if not (SyncQueue.join ?interrupt_cond t.queue) then begin
+          if not (SyncQueue.join ~interrupt_cond t.queue) then begin
             SyncQueue.clear t.queue;
             nats_error Timeout
           end
         end
     end
-
-let signal_timeout t =
-  SyncQueue.signal_interrupt t.queue

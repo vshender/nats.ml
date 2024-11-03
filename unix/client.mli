@@ -36,7 +36,7 @@ type error_callback = t -> nats_error -> unit
     - [error_cb] (optional): a callback function to report asynchronous errors.
     - [inbox_prefix] (optional): a custom prefix for inbox subjects.
 
-    Raises
+    Raises:
 
     - [NatsError NoServers] if the connection was refused.
     - [NatsError ConnectionClosed] if the connection was closed while the
@@ -104,7 +104,12 @@ val publish : t -> ?reply:string -> string -> string -> unit
 (** [request t ?timeout subject payload] sends a request message to the given
     subject and waits for a reply within an optional timeout period.
 
-    Raises [NatsError ConnectionClosed] if the connection is closed. *)
+    Raises
+
+    - [NatsError ConnectionClosed] if the connection is closed.
+    - [NatsError ConnectionLost] if the connection is lost during the
+      operation.
+*)
 val request : t -> ?timeout:float -> string -> string -> Message.t option
 
 (** [flush ?timeout t] performs a round trip to the server and returns when it
@@ -118,6 +123,8 @@ val request : t -> ?timeout:float -> string -> string -> Message.t option
     Raises:
 
     - [NatsError ConnectionClosed] if the connection is closed.
+    - [NatsError ConnectionLost] if the connection is lost during the
+      operation.
     - [NatsError Timeout] if the flush operation times out.
 *)
 val flush : ?timeout:float -> t -> unit
@@ -130,9 +137,11 @@ val close : t -> unit
 (** [drain t] safely closes the connection after ensuring all buffered messages
     have been sent and processed by subscriptions.
 
-    Raises
+    Raises:
 
     - [NatsError ConnectionClosed] if the connection is already closed.
+    - [NatsError ConnectionLost] if the connection is lost during the
+      operation.
     - [NatsError Timeout] if the drain operation times out.
 *)
 val drain : ?timeout:float -> t -> unit

@@ -32,8 +32,8 @@ module PingPongTracker = struct
   type ping_result =
     | Acknowledged
     (** The PING has been successfully acknowledged with a PONG. *)
-    | TimedOut
-    (** The PING has timed out without receiving a PONG. *)
+    | Error of nats_error
+    (** An error occurred while waiting for a PONG. *)
 
   (** The type used to represent an individual PING that is awaiting
       acknowledgement. *)
@@ -42,34 +42,33 @@ module PingPongTracker = struct
     (** The result of the PING, if available. *)
     mutex : Mutex.t;
     (** A mutex to protect access to the PING's result. *)
-    condition : Condition.t;
-    (** A condition variable to signal the result availability. *)
+    resolved : Condition.t;
+    (** A condition variable to signal when the result is available. *)
   }
 
   (** [wait ping] blocks the current thread until the result of [ping] is
-      available. *)
+      available.  Returns the result. *)
   let wait ping =
     Mutex.protect ping.mutex
       begin fun () ->
         while Option.is_none ping.result do
-          Condition.wait ping.condition ping.mutex
+          Condition.wait ping.resolved ping.mutex
         done;
         Option.get ping.result
       end
 
-  (** [resolve ping result] resolves [ping] with the specified [result], making
-      the result available and notifying any threads that are waiting on the
-      PING acknowledgement. *)
+  (** [resolve ping result] resolves [ping] with the specified [result],
+      notifying any threads that are waiting on the PING acknowledgement. *)
   let resolve ping result =
     Mutex.protect ping.mutex
       begin fun () ->
         ping.result <- Some result;
-        Condition.signal ping.condition
+        Condition.signal ping.resolved
       end
 
-  (** The type representing the tracker for managing unacknowledged PINGs. *)
+  (** The type representing a tracker for managing unacknowledged PINGs. *)
   type t = {
-    pings : ping Queue.t;  (** A queue to hold unacknowledged PINGs. *)
+    pings : ping Queue.t;  (** A queue of unacknowledged PINGs. *)
     mutex : Mutex.t;       (** A mutex to protect access to the PINGs queue. *)
   }
 
@@ -84,9 +83,9 @@ module PingPongTracker = struct
       can be used to wait for its result. *)
   let ping t =
     let ping = {
-      result    = None;
-      mutex     = Mutex.create ();
-      condition = Condition.create ();
+      result   = None;
+      mutex    = Mutex.create ();
+      resolved = Condition.create ();
     } in
     Mutex.protect t.mutex
       (fun () -> Queue.add ping t.pings);
@@ -107,17 +106,18 @@ end
 
 (** The module to manage the state of the current synchronous operation,
     ensuring that only one synchronous operation is active at a time.  It also
-    handles timeouts by allowing a function to be called when the operation
-    exceeds its allotted time. *)
+    provides the ability to handle errors and timeouts by calling a function
+    that interrupts the operation. *)
 module CurrentSyncOperation = struct
   (** The type representing a synchronous operation. *)
   type sync_op = {
     thread_id : int;
     (** The ID of the thread that started the synchronous operation. *)
+    signal_interrupt : nats_error -> unit;
+    (** A function to interrupt the synchronous operation in case of failure
+        (e.g., connection closed or timed out). *)
     timeout_time : float option;
     (** An optional timeout time as an absolute Unix timestamp (in seconds). *)
-    signal_timeout : unit -> unit;
-    (** A function to call when the operation times out. *)
   }
 
   (** The type representing the state of the current synchronous operation. *)
@@ -135,20 +135,20 @@ module CurrentSyncOperation = struct
     mutex       = Mutex.create ();
   }
 
-  (** [start t ~timeout_time ~signal_timeout] starts a new synchronous
+  (** [start t ~signal_interrupt ~timeout_time] starts a new synchronous
       operation.  The operation is associated with the calling thread and has
       an optional [timeout_time].
 
       Raises [Failure] if another synchronous operation is already running. *)
-  let start t ~timeout_time ~signal_timeout =
+  let start t ~signal_interrupt ~timeout_time =
     Mutex.protect t.mutex
       begin fun () ->
         match t.cur_sync_op with
         | None ->
           t.cur_sync_op <- Some {
               thread_id = Thread.id @@ Thread.self ();
+              signal_interrupt;
               timeout_time;
-              signal_timeout
             }
         | Some _ -> failwith "another sync operation is running"
       end
@@ -168,20 +168,28 @@ module CurrentSyncOperation = struct
         | None   -> failwith "no sync operation is running"
       end
 
-(** [with_sync_op t ~timeout_time ~signal_timeout f] executes function [f]
+(** [with_sync_op t ~signal_timeout ~timeout_time f] executes the function [f]
     within a synchronous operation context.  It ensures that the operation is
     properly started and finished, even if [f] raises an exception.
 
     Raises [Failure] if another synchronous operation is already running. *)
-  let with_sync_op t ~timeout_time ~signal_timeout f =
-    start t ~timeout_time ~signal_timeout;
+  let with_sync_op t ~signal_interrupt ~timeout_time f =
+    start t ~signal_interrupt ~timeout_time;
     Fun.protect
       ~finally:(fun () -> finish t)
       f
 
+  (** [interrupt t err] interrupts the current synchronous operation with the
+      specified error [err]. *)
+  let interrupt t err =
+    Mutex.protect t.mutex
+      begin fun () ->
+        t.cur_sync_op
+        |> Option.iter (fun { signal_interrupt; _ } -> signal_interrupt err)
+      end
+
   (** [check_timeout t] checks if the current synchronous operation has
-      exceeded its timeout, and if so, calls the [signal_timeout] function
-      associated with it.
+      exceeded its timeout, and if so, interrupts it with the [Timeout] error.
 
       This function should be called periodically to enforce timeouts on
       synchronous operations. *)
@@ -189,8 +197,8 @@ module CurrentSyncOperation = struct
     Mutex.protect t.mutex
       begin fun () ->
         match t.cur_sync_op with
-        | Some { timeout_time = Some ttime; signal_timeout; _ } ->
-          if gettimeofday () >= ttime then signal_timeout ()
+        | Some { timeout_time = Some ttime; signal_interrupt; _ } ->
+          if gettimeofday () >= ttime then signal_interrupt Timeout
         | Some { timeout_time = None; _ } | None ->
           ()
       end
@@ -221,7 +229,7 @@ module Subscriptions = struct
     Mutex.protect t.mutex
       (fun () -> Hashtbl.iter (fun _sid sub -> f sub) t.subs)
 
-(** [add ?schedule_message_handling ?sync_op_started ?sync_op_finished ~unsubscribe ~remove_subscription t subject group callback]
+(** [add ?schedule_message_handling ?sync_op_started ?sync_op_finished ~flush ~unsubscribe ~remove_subscription t subject group callback]
     adds a new subscription to the collection [t] with the specified
     parameters.
 
@@ -270,10 +278,12 @@ end
 
 (** The module for managing pending requests and their results. *)
 module PendingRequest = struct
-  (** The type representing results of a pending request. *)
+  (** The type representing results of pending requests. *)
   type result =
-    | Response of Message.t  (** A successful response containing a message. *)
-    | TimeOut                (** The request timed out without a response. *)
+    | Response of Message.t
+    (** A successful response containing a message. *)
+    | Error of nats_error
+    (** An error occurred while waiting for the response. *)
 
   (** The type representing a pending request that waits for a result. *)
   type t = {
@@ -283,7 +293,7 @@ module PendingRequest = struct
     (** The result of the request, if available. *)
     mutex : Mutex.t;
     (** A mutex to protect access to the result. *)
-    condition : Condition.t;
+    resolved : Condition.t;
     (** A condition variable to signal when the result becomes available. *)
   }
 
@@ -291,19 +301,19 @@ module PendingRequest = struct
       subject. *)
   let create inbox = {
     inbox;
-    result    = None;
-    mutex     = Mutex.create ();
-    condition = Condition.create ();
+    result   = None;
+    mutex    = Mutex.create ();
+    resolved = Condition.create ();
   }
 
   (** [wait t] blocks the current thread until the result of the pending
-      request [t] is available.  Once the result becomes available, it returns
-      the [result]. *)
+      request [t] becomes available.  Once the result is available, the
+      function returns it. *)
   let wait t =
     Mutex.protect t.mutex
       begin fun () ->
         while Option.is_none t.result do
-          Condition.wait t.condition t.mutex
+          Condition.wait t.resolved t.mutex
         done;
         Option.get t.result
       end
@@ -315,7 +325,7 @@ module PendingRequest = struct
     Mutex.protect t.mutex
       begin fun () ->
         t.result <- Some result;
-        Condition.signal t.condition
+        Condition.signal t.resolved
       end
 end
 
@@ -452,13 +462,12 @@ let flush ?timeout c =
   let ping = send_ping c in
   CurrentSyncOperation.with_sync_op
     c.cur_sync_op
+    ~signal_interrupt:(fun err -> PingPongTracker.resolve ping @@ Error err)
     ~timeout_time
-    ~signal_timeout:(fun () ->
-        PingPongTracker.resolve ping PingPongTracker.TimedOut)
     begin fun () ->
       match PingPongTracker.wait ping with
       | Acknowledged -> ()
-      | TimedOut     -> nats_error Timeout
+      | Error err    -> nats_error err
     end
 
 let close c =
@@ -493,6 +502,7 @@ let close_from_io_thread c =
     parsing the protocol. *)
 let process_op_err c err =
   Mutex.protect c.mutex (fun () -> c.err <- Some err);
+  CurrentSyncOperation.interrupt c.cur_sync_op err;
   close_from_io_thread c
 
 (** [process_err c err_msg] handles error messages from the server. *)
@@ -505,6 +515,7 @@ let process_err c err_msg =
     c.options.error_cb c err
   | _ ->
     Mutex.protect c.mutex (fun () -> c.err <- Some err);
+    CurrentSyncOperation.interrupt c.cur_sync_op err;
     close_from_io_thread c
 
 (** [remaining_time_fn timeout] returns a function that calculates the time
@@ -523,7 +534,7 @@ let remaining_time_fn timeout =
     client [c].  If a [timeout] is provided, the operation will fail if the
     timeout is exceeded.
 
-    Raises
+    Raises:
 
     - [NatsError ConnectionClosed] if the connection is closed.
     - [NatsError Timeout] if the reading times out.
@@ -560,7 +571,7 @@ let read_client_msg ?timeout c =
     and outgoing messages. *)
 let rec io_loop c =
   let select_timeout = 0.05 in
-  let exception Close of nats_error in
+  let exception Break of nats_error in
   try
     Fun.protect
       ~finally:begin fun () ->
@@ -595,7 +606,7 @@ let rec io_loop c =
           if List.length readable > 0 then begin
             match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
             | 0 ->
-              raise @@ Close ConnectionClosed
+              raise @@ Break ConnectionLost
             | n ->
               Mutex.protect c.mutex
                 (fun () -> Reader.feed c.reader c.in_buffer 0 n)
@@ -611,7 +622,7 @@ let rec io_loop c =
                     iovec.Faraday.buffer iovec.off iovec.len
                 with
                 | 0 ->
-                  raise @@ Close ConnectionClosed
+                  raise @@ Break ConnectionLost
                 | n ->
                   Mutex.protect c.mutex
                     (fun () -> Faraday.shift c.serializer n)
@@ -632,7 +643,7 @@ let rec io_loop c =
             | Reader.Need_input ->
               ()
             | Reader.Parse_error (_, e) ->
-              raise @@ Close (ProtocolError e)
+              raise @@ Break (ProtocolError e)
           in msg_processing_loop ();
 
           (* PING/PONG *)
@@ -643,7 +654,7 @@ let rec io_loop c =
         done
       end
   with
-  | Close err ->
+  | Break err ->
     process_op_err c err
   | exn ->
     (* TODO: handle the error *)
@@ -720,14 +731,14 @@ let unsubscribe c sub =
   in
   send_msg c unsub_msg
 
-(** [sync_sub_op_started c sub ~timeout_time] registers the start of a
-    synchronous operation for the subscription [sub], with an optional
-    timeout. *)
-let sync_sub_op_started c sub ~timeout_time =
+(** [sync_sub_op_started c sub ~signal_interrupt ~timeout_time] registers the
+    start of a synchronous operation for the subscription [sub], with an
+    optional timeout. *)
+let sync_sub_op_started c _sub ~signal_interrupt ~timeout_time =
   CurrentSyncOperation.start
     c.cur_sync_op
     ~timeout_time
-    ~signal_timeout:(fun () -> Subscription.signal_timeout sub)
+    ~signal_interrupt
 
 (** [sync_sub_op_finished c sub] marks the completion of a synchronous
     operation for the subscription [sub].*)
@@ -777,8 +788,8 @@ let request c ?timeout subject payload =
 
   CurrentSyncOperation.with_sync_op
     c.cur_sync_op
+    ~signal_interrupt:(fun err -> PendingRequest.resolve req @@ Error err)
     ~timeout_time
-    ~signal_timeout:(fun () -> PendingRequest.(resolve req TimeOut))
     begin fun () ->
       Mutex.protect c.mutex (fun () -> c.cur_request <- Some req);
       Fun.protect
@@ -787,8 +798,9 @@ let request c ?timeout subject payload =
           publish c ~reply:resp_subject subject payload;
 
           match PendingRequest.wait req with
-          | Response msg -> Some msg
-          | TimeOut      -> None
+          | Response msg  -> Some msg
+          | Error Timeout -> None
+          | Error err     -> nats_error err
         end
     end
 
@@ -821,8 +833,8 @@ let drain ?timeout c =
 
       CurrentSyncOperation.with_sync_op
         c.cur_sync_op
+        ~signal_interrupt:(fun _ -> SyncQueue.signal_interrupt c.msg_queue)
         ~timeout_time
-        ~signal_timeout:(fun () -> SyncQueue.signal_interrupt c.msg_queue)
         begin fun () ->
           if not (SyncQueue.join c.msg_queue ?interrupt_cond:timed_out) then begin
             SyncQueue.clear c.msg_queue;
