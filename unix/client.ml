@@ -21,7 +21,8 @@ let default_url = Printf.sprintf "nats://%s:%d" default_hostname default_port
 
 let default_inbox_prefix = "_INBOX"
 
-let default_ping_interval = 120.  (* in seconds *)
+let default_ping_interval = 120.       (* in seconds *)
+let default_max_pings_outstanding = 2
 
 type callback = Subscription.callback
 
@@ -100,7 +101,7 @@ module PingPongTracker = struct
       begin fun () ->
         match Queue.take_opt t.pings with
         | Some ping -> resolve ping Acknowledged
-        | None      -> assert false
+        | None      -> ()
       end
 end
 
@@ -374,6 +375,8 @@ type t = {
   (** Tracks unacknowledged PINGs. *)
   mutable next_ping_time : float;
   (** The time when the next PING should be sent. *)
+  mutable pings_outstanding : int;
+  (** The number of pending PING commands that are awaiting a response. *)
   mutable io_thread : Thread.t;
   (** The thread handling network I/O operations. *)
   mutable msg_thread : Thread.t;
@@ -400,6 +403,9 @@ and options = {
   ping_interval : float;
   (** The interval (in seconds) at which the client will be sending PING
       messages to the server.  Defaults to 2m.  *)
+  max_pings_outstanding : int;
+  (** The maximum number of pending PING commands that can be awaiting a
+      response before raising a [StaleConnection] error. *)
   connect_timeout : float option;
   (** The timeout for a connection operation to complete. *)
   closed_cb : conn_callback;
@@ -648,8 +654,13 @@ let rec io_loop c =
 
           (* PING/PONG *)
           if Unix.gettimeofday () >= c.next_ping_time then begin
-            ignore @@ send_ping c;
-            c.next_ping_time <- c.next_ping_time +. c.options.ping_interval
+            c.pings_outstanding <- c.pings_outstanding + 1;
+            if c.pings_outstanding >= c.options.max_pings_outstanding then
+              process_op_err c StaleConnection
+            else begin
+              ignore @@ send_ping c;
+              c.next_ping_time <- c.next_ping_time +. c.options.ping_interval
+            end
           end
         done
       end
@@ -674,6 +685,7 @@ and dispatch_message c = function
   | ServerMessage.Ping ->
     send_msg c ClientMessage.Pong
   | ServerMessage.Pong ->
+    c.pings_outstanding <- 0;
     PingPongTracker.pong c.ping_pongs
   | ServerMessage.Info _ ->
     ()  (* TODO: handle updated info *)
@@ -898,6 +910,7 @@ let connect
     ?(verbose = true)
     ?(pedantic = false)
     ?(ping_interval = default_ping_interval)
+    ?(max_pings_outstanding = default_max_pings_outstanding)
     ?connect_timeout
     ?(closed_cb = Fun.const ())
     ?(error_cb = default_error_callback)
@@ -909,6 +922,7 @@ let connect
     verbose;
     pedantic;
     ping_interval;
+    max_pings_outstanding;
     connect_timeout;
     closed_cb;
     error_cb;
@@ -933,26 +947,27 @@ let connect
 
   let nuid = Nuid.State.create () in
   let conn = {
-    mutex           = Mutex.create ();
+    mutex             = Mutex.create ();
     options;
-    state           = Connected;
+    state             = Connected;
     sock;
-    in_buffer       = Bytes.create 0x1000;
-    reader          = Reader.create ();
-    serializer      = Faraday.create 0x1000;
+    in_buffer         = Bytes.create 0x1000;
+    reader            = Reader.create ();
+    serializer        = Faraday.create 0x1000;
     nuid;
     inbox_prefix;
-    resp_sub_prefix = Printf.sprintf
+    resp_sub_prefix   = Printf.sprintf
         "%s.%s." inbox_prefix (Nuid.State.next nuid);
-    subscriptions   = Subscriptions.create ();
-    cur_sync_op     = CurrentSyncOperation.create ();
-    cur_request     = None;
-    ping_pongs      = PingPongTracker.create ();
-    next_ping_time  = Unix.gettimeofday () +. ping_interval;
-    io_thread       = Thread.self ();
-    msg_thread      = Thread.self ();
-    msg_queue       = SyncQueue.create ();
-    err             = None;
+    subscriptions     = Subscriptions.create ();
+    cur_sync_op       = CurrentSyncOperation.create ();
+    cur_request       = None;
+    ping_pongs        = PingPongTracker.create ();
+    next_ping_time    = Unix.gettimeofday () +. ping_interval;
+    pings_outstanding = 0;
+    io_thread         = Thread.self ();
+    msg_thread        = Thread.self ();
+    msg_queue         = SyncQueue.create ();
+    err               = None;
   } in
 
   begin

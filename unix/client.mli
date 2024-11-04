@@ -29,8 +29,11 @@ type error_callback = t -> nats_error -> unit
       (turned off by default).
     - [connect_timeout] (optional): specifies the connection timeout in
       seconds.
-    - [ing_interval] (optional): the period (in seconds) at which the client
+    - [ping_interval] (optional): the period (in seconds) at which the client
       will be sending PING commands to the server.  Defaults to 120 seconds.
+    - [max_pings_outstanding] (optional): the maximum number of pending PING
+      commands that can be awaiting a response before raising a
+      [StaleConnection] error.  Defaults to 2.
     - [closed_cb] (optional): a callback function that is called when the
       client is no longer connected to a server.
     - [error_cb] (optional): a callback function to report asynchronous errors.
@@ -53,6 +56,7 @@ val connect :
   ?verbose:bool ->
   ?pedantic:bool ->
   ?ping_interval:float ->
+  ?max_pings_outstanding:int ->
   ?connect_timeout:float ->
   ?closed_cb:conn_callback ->
   ?error_cb:error_callback ->
