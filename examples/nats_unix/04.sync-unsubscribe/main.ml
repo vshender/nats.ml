@@ -17,16 +17,10 @@ let main () =
      immediately be broadcasted to all subscriptions.  They will land in
      their buffer for subsequent [next_msg] calls. *)
   let msg = Subscription.next_msg sub ~timeout:1. in
-  begin match msg with
-    | Some msg -> Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
-    | None     -> assert false
-  end;
+  Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject;
 
   let msg = Subscription.next_msg sub ~timeout:1. in
-  begin match msg with
-    | Some msg -> Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
-    | None     -> assert false
-  end;
+  Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject;
 
   (* Unsubscribe from the "greet.*" wildcard. *)
   Subscription.unsubscribe sub;

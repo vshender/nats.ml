@@ -28,26 +28,32 @@ let main () =
 
   (* Send a request to the "request" subject with a timeout of 1.5 seconds,
      that will be completed within one second. *)
-  let reply = Client.request nc "request" "request 1" ~timeout:1.5 in
-  begin match reply with
-    | Some reply -> Printf.printf "reply 1: %s\n%!" reply.payload
-    | None       -> assert false
+  begin
+    try
+      let reply = Client.request nc "request" "request 1" ~timeout:1.5 in
+      Printf.printf "reply 1: %s\n%!" reply.payload
+    with NatsError Timeout ->
+      Printf.printf "reply 1: timeout\n%!"
   end;
 
   (* Send a request to the "request" subject with a timeout of 1.5 seconds,
      that will be completed within two seconds. *)
-  let reply = Client.request nc "request" "request 2" ~timeout:1.5 in
-  begin match reply with
-    | None   -> Printf.printf "reply 2: timeout\n%!"
-    | Some _ -> assert false
+  begin
+    try
+      let reply = Client.request nc "request" "request 2" ~timeout:1.5 in
+      Printf.printf "reply 2: %s\n%!" reply.payload
+    with NatsError Timeout ->
+      Printf.printf "reply 2: timeout\n%!"
   end;
 
   (* Send a request to the "request" subject without a timeout, that will be
      completed within one second. *)
-  let reply = Client.request nc "request" "request 3" in
-  begin match reply with
-    | Some reply -> Printf.printf "reply 3: %s\n%!" reply.payload
-    | None       -> assert false
+  begin
+    try
+      let reply = Client.request nc "request" "request 3" in
+      Printf.printf "reply 3: %s\n%!" reply.payload
+    with NatsError Timeout ->
+      Printf.printf "reply 3: timeout\n%!"
   end
 
 let () = main ()

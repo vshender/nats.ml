@@ -101,16 +101,29 @@ val subscribe : t -> ?group:string -> ?callback:callback -> string -> Subscripti
     Raises [NatsError ConnectionClosed] if the connection is closed. *)
 val publish : t -> ?reply:string -> string -> string -> unit
 
+val request : t -> ?timeout:float -> string -> string -> Message.t
 (** [request t ?timeout subject payload] sends a request message to the given
     subject and waits for a reply within an optional timeout period.
 
-    Raises
+    Raises:
+
+    - [NatsError ConnectionClosed] if the connection is closed.
+    - [NatsError ConnectionLost] if the connection is lost during the
+      operation.
+    - [NatsError Timeout] if the request times out.
+*)
+
+(** [request t ?timeout subject payload] sends a request message to the given
+    subject and waits for a reply within an optional timeout period.  Returns
+    [None] if the request times out.
+
+    Raises:
 
     - [NatsError ConnectionClosed] if the connection is closed.
     - [NatsError ConnectionLost] if the connection is lost during the
       operation.
 *)
-val request : t -> ?timeout:float -> string -> string -> Message.t option
+val request_opt : t -> ?timeout:float -> string -> string -> Message.t option
 
 (** [flush ?timeout t] performs a round trip to the server and returns when it
     receives the internal reply, or if the call times-out ([timeout] is

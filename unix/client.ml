@@ -798,11 +798,16 @@ let request c ?timeout subject payload =
           publish c ~reply:resp_subject subject payload;
 
           match PendingRequest.wait req with
-          | Response msg  -> Some msg
-          | Error Timeout -> None
+          | Response msg  -> msg
           | Error err     -> nats_error err
         end
     end
+
+let request_opt c ?timeout subject payload =
+  try
+    Some (request c subject payload ?timeout)
+  with NatsError Timeout ->
+    None
 
 let drain ?timeout c =
   if state c = Closed then

@@ -16,7 +16,7 @@ let main () =
   (* For a synchronous subscription, we need to fetch the next message.
      However, since the publish occured before the subscription was
      established, this is going to timeout. *)
-  let msg = Subscription.next_msg sub ~timeout:1. in
+  let msg = Subscription.next_msg_opt sub ~timeout:1. in
   Printf.printf "subscribed after a publish...\n%!";
   Printf.printf "msg is nil? %b\n%!" (Option.is_none msg);
 
@@ -28,24 +28,15 @@ let main () =
      immediately be broadcasted to all subscriptions.  They will land in
      their buffer for subsequent [next_msg] calls. *)
   let msg = Subscription.next_msg sub ~timeout:1. in
-  begin match msg with
-    | Some msg -> Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
-    | None     -> assert false
-  end;
+  Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject;
 
   let msg = Subscription.next_msg sub ~timeout:1. in
-  begin match msg with
-    | Some msg -> Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
-    | None     -> assert false
-  end;
+  Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject;
 
   (* One more for good measures... *)
   Client.publish nc "greet.bob" "hello 3";
 
   let msg = Subscription.next_msg sub ~timeout:1. in
-  begin match msg with
-    | Some msg -> Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
-    | None     -> assert false
-  end
+  Printf.printf "msg data: %s on subject %s\n%!" msg.payload msg.subject
 
 let () = main ()

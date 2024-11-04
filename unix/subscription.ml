@@ -140,7 +140,12 @@ let with_sync_op ?timeout t f =
   t.sync_op_started |> Option.iter (fun cb -> cb t ~signal_interrupt ~timeout_time);
   Fun.protect
     ~finally:(fun () -> t.sync_op_finished |> Option.iter (fun cb -> cb t))
-    (fun () -> f interrupt_cond)
+    begin fun () ->
+      let result = f interrupt_cond in
+      match !sync_op_err with
+      | Some err -> nats_error err
+      | None     -> result
+    end
 
 let next_msg ?timeout t =
   if not (is_sync t) then
@@ -148,8 +153,15 @@ let next_msg ?timeout t =
   if is_closed t && SyncQueue.is_empty t.queue then
     nats_error SubscriptionClosed;
 
+  Option.get @@
   with_sync_op ?timeout t
     (fun interrupt_cond -> SyncQueue.get ~interrupt_cond t.queue)
+
+let next_msg_opt ?timeout t =
+  try
+    Some (next_msg t ?timeout)
+  with NatsError Timeout ->
+    None
 
 let unsubscribe ?max_msgs t =
   if is_closed t then
@@ -195,9 +207,7 @@ let drain ?timeout t =
       (* Wait until all pending messages are processed. *)
       with_sync_op ?timeout t
         begin fun interrupt_cond ->
-          if not (SyncQueue.join ~interrupt_cond t.queue) then begin
+          if not (SyncQueue.join ~interrupt_cond t.queue) then
             SyncQueue.clear t.queue;
-            nats_error Timeout
-          end
         end
     end
