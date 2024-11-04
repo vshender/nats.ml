@@ -422,6 +422,11 @@ and error_callback = t -> nats_error -> unit
 let last_error c =
   Mutex.protect c.mutex (fun () -> c.err)
 
+(** [set_last_error c err] sets the last error encountered via the
+    connection. *)
+let set_last_error c err =
+  Mutex.protect c.mutex (fun () -> c.err <- Some err)
+
 let new_inbox c =
   Printf.sprintf "%s.%s" c.inbox_prefix (Nuid.State.next c.nuid)
 
@@ -507,7 +512,7 @@ let close_from_io_thread c =
 (** [process_op_err c err] handles errors which occured while reading or
     parsing the protocol. *)
 let process_op_err c err =
-  Mutex.protect c.mutex (fun () -> c.err <- Some err);
+  set_last_error c err;
   CurrentSyncOperation.interrupt c.cur_sync_op err;
   close_from_io_thread c
 
@@ -515,12 +520,13 @@ let process_op_err c err =
 let process_err c err_msg =
   let err = parse_server_err_msg err_msg in
   match err with
-  | StaleConnection | MaxConnectionsExceeded -> process_op_err c err
+  | StaleConnection | MaxConnectionsExceeded ->
+    process_op_err c err
   | InvalidSubject | PermissionsViolation _ ->
-    Mutex.protect c.mutex (fun () -> c.err <- Some err);
+    set_last_error c err;
     c.options.error_cb c err
   | _ ->
-    Mutex.protect c.mutex (fun () -> c.err <- Some err);
+    set_last_error c err;
     CurrentSyncOperation.interrupt c.cur_sync_op err;
     close_from_io_thread c
 
@@ -581,12 +587,12 @@ let rec io_loop c =
   try
     Fun.protect
       ~finally:begin fun () ->
+        Subscriptions.iter c.subscriptions Subscription.close;
+        Subscriptions.remove_all c.subscriptions;
+        shutdown c.sock SHUTDOWN_ALL;
+        Unix.close c.sock;
         Mutex.protect c.mutex
           begin fun () ->
-            Subscriptions.iter c.subscriptions Subscription.close;
-            Subscriptions.remove_all c.subscriptions;
-            shutdown c.sock SHUTDOWN_ALL;
-            Unix.close c.sock;
             Faraday.close c.serializer;
             ignore @@ Faraday.drain c.serializer
           end
@@ -608,17 +614,16 @@ let rec io_loop c =
               select_timeout
           in
 
-          (* Read incoming data *)
+          (* Read incoming data. *)
           if List.length readable > 0 then begin
             match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
             | 0 ->
               raise @@ Break ConnectionLost
             | n ->
-              Mutex.protect c.mutex
-                (fun () -> Reader.feed c.reader c.in_buffer 0 n)
+              Reader.feed c.reader c.in_buffer 0 n
           end;
 
-          (* Send outgoing data *)
+          (* Send outgoing data. *)
           if List.length writeable > 0 then
             iovec |> Option.iter
               begin fun iovec ->
@@ -639,9 +644,7 @@ let rec io_loop c =
 
           (* Process messages. *)
           let rec msg_processing_loop () =
-            let next_msg = Mutex.protect c.mutex
-                (fun () -> Reader.next_msg c.reader)
-            in
+            let next_msg = Reader.next_msg c.reader in
             match next_msg with
             | Reader.Message msg ->
               dispatch_message c msg;
@@ -977,14 +980,11 @@ let connect
 
       ignore @@ subscribe conn (conn.resp_sub_prefix ^ "*")
         ~callback:begin fun msg ->
-          Mutex.protect conn.mutex
-            begin fun () ->
-              let req = conn.cur_request in
-              match req with
-              | Some req when msg.subject = req.inbox ->
-                PendingRequest.(resolve req (Response msg))
-              | _ -> ()
-            end
+          let req = Mutex.protect conn.mutex (fun () -> conn.cur_request) in
+          match req with
+          | Some req when msg.subject = req.inbox ->
+            PendingRequest.(resolve req (Response msg))
+          | _ -> ()
         end
     with exn ->
       shutdown conn.sock SHUTDOWN_ALL;
