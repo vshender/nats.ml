@@ -560,7 +560,7 @@ let read_client_msg ?timeout c =
         c.in_buffer 0 (Bytes.length c.in_buffer)
       |> begin function
         | 0 ->
-          nats_error ConnectionClosed;
+          nats_error ConnectionLost;
         | n ->
           Reader.feed c.reader c.in_buffer 0 n;
           loop ()
