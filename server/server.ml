@@ -30,10 +30,12 @@ let create ?id ?port () =
   in
   { id; port; pid = None }
 
+let pid { pid; _ } = pid
+
 (** [logfile server] returns the path to the server's log file. *)
-let logfile server =
+let logfile { id; _ } =
   let tmpdir = Filename.get_temp_dir_name () in
-  Filename.concat tmpdir @@ Printf.sprintf "nats-server-%s.log" server.id
+  Filename.concat tmpdir @@ Printf.sprintf "nats-server-%s.log" id
 
 let start server =
   match server.pid with
@@ -58,7 +60,7 @@ let stop server =
       server.pid <- None;
       kill pid Sys.sigterm;
       ignore @@ waitpid [] pid;
-      unlink @@ logfile server;
+      try unlink (logfile server) with Unix_error(ENOENT, _, _) -> ()
     with Unix_error (ESRCH, _, _) ->
       ()
 

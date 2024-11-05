@@ -27,6 +27,9 @@ val stop : t -> unit
     and then stops the server. *)
 val with_server : ?id:string -> ?port:int -> (t -> 'a) -> 'a
 
+(** [pid t] returns the PID of the running NATS service instance [t]. *)
+val pid : t -> int option
+
 (** [is_running t] returns [true] if the NATS server instance [t] is currently
     running, and [false] otherwise. *)
 val is_running : t -> bool
