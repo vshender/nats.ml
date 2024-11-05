@@ -20,11 +20,11 @@
   "An OCaml library providing core building blocks for creating NATS clients")
  (depends
   (ocaml (>= 4.14.0))
-  (angstrom (>= 0.16.0))
+  (angstrom (>= 0.15.0))
   (faraday (>= 0.8.2))
-  (ppx_deriving (>= 6.0.2))
-  (ppx_deriving_yojson (>= 3.8.0))
-  (alcotest (and (>= 1.7.0) :with-test))))
+  (ppx_deriving (>= 5.2.1))
+  (ppx_deriving_yojson (>= 3.7.0))
+  (alcotest (and (>= 1.6.0) :with-test))))
 
 (package
  (name nats-server)
@@ -43,10 +43,9 @@
   (ocaml (>= 4.14.0))
   (nats (= :version))
   (nuid (= :version))
-  (uri (>= 4.4.0))
+  (uri (>= 4.2.0))
   (cppo (>= 1.6.9))
-  (alcotest (and (>= 1.7.0) :with-test))
-  (benchmark (and (>= 1.6) :with-test))))
+  (alcotest (and (>= 1.6.0) :with-test))))
 
 (package
  (name nuid)
@@ -54,5 +53,5 @@
   "A highly performant unique identifier generator")
  (depends
   (ocaml (>= 4.14.0))
-  (alcotest (and (>= 1.7.0) :with-test))
+  (alcotest (and (>= 1.6.0) :with-test))
   (benchmark (and (>= 1.6) :with-test))))

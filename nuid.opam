@@ -9,7 +9,7 @@ bug-reports: "https://github.com/vshender/nats.ml/issues"
 depends: [
   "dune" {>= "3.4"}
   "ocaml" {>= "4.14.0"}
-  "alcotest" {>= "1.7.0" & with-test}
+  "alcotest" {>= "1.6.0" & with-test}
   "benchmark" {>= "1.6" & with-test}
   "odoc" {with-doc}
 ]

@@ -32,6 +32,8 @@ jobs:
         run: touch go.sum
       - name: setup Go
         uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.2
 
       - name: install NATS server
         run: go install github.com/nats-io/nats-server/v2@main

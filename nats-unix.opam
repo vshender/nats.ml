@@ -12,10 +12,9 @@ depends: [
   "ocaml" {>= "4.14.0"}
   "nats" {= version}
   "nuid" {= version}
-  "uri" {>= "4.4.0"}
+  "uri" {>= "4.2.0"}
   "cppo" {>= "1.6.9"}
-  "alcotest" {>= "1.7.0" & with-test}
-  "benchmark" {>= "1.6" & with-test}
+  "alcotest" {>= "1.6.0" & with-test}
   "odoc" {with-doc}
 ]
 build: [

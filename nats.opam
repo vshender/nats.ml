@@ -10,11 +10,11 @@ bug-reports: "https://github.com/vshender/nats.ml/issues"
 depends: [
   "dune" {>= "3.4"}
   "ocaml" {>= "4.14.0"}
-  "angstrom" {>= "0.16.0"}
+  "angstrom" {>= "0.15.0"}
   "faraday" {>= "0.8.2"}
-  "ppx_deriving" {>= "6.0.2"}
-  "ppx_deriving_yojson" {>= "3.8.0"}
-  "alcotest" {>= "1.7.0" & with-test}
+  "ppx_deriving" {>= "5.2.1"}
+  "ppx_deriving_yojson" {>= "3.7.0"}
+  "alcotest" {>= "1.6.0" & with-test}
   "odoc" {with-doc}
 ]
 build: [
