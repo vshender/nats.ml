@@ -910,7 +910,7 @@ let send_connect ?timeout c =
 let connect
     ?(url = default_url)
     ?(name = client_name)
-    ?(verbose = true)
+    ?(verbose = false)
     ?(pedantic = false)
     ?(ping_interval = default_ping_interval)
     ?(max_pings_outstanding = default_max_pings_outstanding)
