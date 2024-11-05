@@ -17,7 +17,7 @@
 (package
  (name nats)
  (synopsis
-  "OCaml client library for NATS, the cloud native messaging system")
+  "An OCaml library providing core building blocks for creating NATS clients")
  (depends
   (ocaml (>= 4.14.0))
   (angstrom (>= 0.16.0))
@@ -27,12 +27,22 @@
   (alcotest (and (>= 1.7.0) :with-test))))
 
 (package
- (name nats-unix)
+ (name nats-server)
  (synopsis
-  "Unix library based client for NATS, the cloud native messaging system")
+  "A library for managing NATS server instances for testing purposes")
  (depends
   (ocaml (>= 4.14.0))
   (nats (= :version))
+  (nuid (= :version))))
+
+(package
+ (name nats-unix)
+ (synopsis
+  "A Unix library-based client for NATS, the cloud native messaging system")
+ (depends
+  (ocaml (>= 4.14.0))
+  (nats (= :version))
+  (nuid (= :version))
   (uri (>= 4.4.0))
   (cppo (>= 1.6.9))
   (alcotest (and (>= 1.7.0) :with-test))

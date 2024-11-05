@@ -22,6 +22,16 @@ type nats_error =
   | AuthenticationRevoked
   | AccountAuthenticationExpired
   | ServerError of string
+  (* | BadQueueName             (\** Invalid queue name. *\) *)
+  (* | ErrSlowConsumer          (\** Slow consumer, messages dropped. *\) *)
+  (* | BadTimeout               (\** Invalid timeout. *\) *)
+  (* | JsonParse                (\** Connect message, JSON parse error. *\) *)
+  (* | NoEchoNotSupported       (\** No echo option not supported by this server. *\) *)
+  (* | ClientIDNotSupported     (\** Client ID not supported by this server *\) *)
+  (* | MsgNotBound              (\** Message is not bound to subscription/connection. *\) *)
+  (* | MsgNoReply               (\** Message does not have a reply. *\) *)
+  (* | Disconnected             (\** Server is disconnected. *\) *)
+  (* | NoResponders             (\** No responders available for request. *\) *)
 
 let error_message = function
   | NoServers                    -> "no servers available for connection"
@@ -43,6 +53,16 @@ let error_message = function
   | AuthenticationRevoked        -> "authentication revoked"
   | AccountAuthenticationExpired -> "account authentication expired"
   | ServerError e                -> e
+  (* | BadQueueName           -> "nats: invalid queue name" *)
+  (* | ErrSlowConsumer        -> "nats: slow consumer, messages dropped" *)
+  (* | BadTimeout             -> "nats: invalid timeout" *)
+  (* | JsonParse              -> "nats: connect message, JSON parse error" *)
+  (* | NoEchoNotSupported     -> "nats: no echo option not supported by this server" *)
+  (* | ClientIDNotSupported   -> "nats: client ID not supported by this server" *)
+  (* | MsgNotBound            -> "nats: message is not bound to subscription/connection" *)
+  (* | MsgNoReply             -> "nats: message does not have a reply" *)
+  (* | Disconnected           -> "nats: server is disconnected" *)
+  (* | NoResponders           -> "nats: no responders available for request" *)
 
 let parse_server_err_msg err_msg =
   match String.lowercase_ascii err_msg with

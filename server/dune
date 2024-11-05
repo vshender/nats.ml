@@ -1,0 +1,4 @@
+(library
+ (name nats_server)
+ (public_name nats-server)
+ (libraries str threads nats nuid))
