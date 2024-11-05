@@ -28,6 +28,14 @@ jobs:
         with:
           ocaml-compiler: ${{ matrix.ocaml-version }}
 
+      - name: generate go.sum  # go.sum is required by caching on the next step
+        run: touch go.sum
+      - name: setup Go
+        uses: actions/setup-go@v5
+
+      - name: install NATS server
+        run: go install github.com/nats-io/nats-server/v2@main
+
       - name: deps
         run: |
           opam pin add --no-action nats .
