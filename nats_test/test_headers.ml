@@ -1,4 +1,4 @@
-(* Tests for NATS message headers. *)
+(* NATS message headers tests. *)
 
 open Alcotest
 
@@ -11,7 +11,10 @@ let (-:) name f = test_case name `Quick f
 let hdrs_to_list h = fold (fun k v accu -> (k, v) :: accu) h [] |> List.rev
 
 let tests = "headers", [
-    (* Tests for the `version` function. *)
+    (* {{{ The [version] function tests.
+       ------------------------------------------------------------------------
+    *)
+
     "version: 1.0" -: begin fun () ->
       let hdrs = make ~headers:[("A", "one")] () in
       version hdrs
@@ -24,7 +27,12 @@ let tests = "headers", [
       |> check (pair int int) "version is 2.0" (2, 0)
     end;
 
-    (* Tests for the `get` function. *)
+    (* }}} *)
+
+    (* {{{ The [get] function tests.
+       ------------------------------------------------------------------------
+    *)
+
     "get: no value" -: begin fun () ->
       let hdrs = make ~headers:[("B", "two")] () in
       get "A" hdrs
@@ -43,7 +51,12 @@ let tests = "headers", [
       |> check (option string) "first matching header value" (Some "one")
     end;
 
-    (* Tests for the `values` function. *)
+    (* }}} *)
+
+    (* {{{ The [values] function tests.
+       ------------------------------------------------------------------------
+    *)
+
     "values: no value" -: begin fun () ->
       let hdrs = make ~headers:[("B", "two")] () in
       values "A" hdrs
@@ -62,7 +75,12 @@ let tests = "headers", [
       |> check (list string) "all matching header values" ["one"; "three"]
     end;
 
-    (* Tests for the `fold` function. *)
+    (* }}} *)
+
+    (* {{{ The [fold] function tests.
+       ------------------------------------------------------------------------
+    *)
+
     "fold: empty headers" -: begin fun () ->
       let hdrs = make ~headers:[] () in
       hdrs_to_list hdrs
@@ -80,4 +98,6 @@ let tests = "headers", [
       hdrs_to_list hdrs
       |> check (list (pair string string)) "multiple headers" [("A", "one"); ("B", "two"); ("A", "three")]
     end;
+
+    (* }}} *)
   ]

@@ -1,14 +1,15 @@
-(** Tests for NUID generator. *)
+(** NUID generator tests. *)
 
 open Alcotest
 
 open Nuid.TestingInterface
 
-let quick_tests = "quick tests", [
+let tests = "NUID", [
     test_case "digits length" `Quick begin fun () ->
       String.length State.digits
       |> check int "digits length matches base module" State.base
     end;
+
     test_case "total_len" `Quick begin fun () ->
       State.(pre_len + seq_len)
       |> check
@@ -16,10 +17,12 @@ let quick_tests = "quick tests", [
         "total length is sum of lengths of prefix and sequential components"
         State.total_len
     end;
+
     test_case "NUID length" `Quick begin fun () ->
       State.(create () |> next) |> String.length
       |> check int "NUID length is valid" State.total_len
     end;
+
     test_case "rollover" `Quick begin fun () ->
       let st = State.create () in
       st.seq <- State.max_seq;
@@ -28,9 +31,7 @@ let quick_tests = "quick tests", [
       let cur_pre = Bytes.sub st.cur 0 State.pre_len in
       check (neg bytes) "rollover happened" old_pre cur_pre
     end;
-  ]
 
-let slow_tests = "slow tests", [
     test_case "digits" `Slow begin fun () ->
       let exception InvalidDigit in
       let module CSet = Set.Make (Char) in
@@ -52,6 +53,7 @@ let slow_tests = "slow tests", [
       with InvalidDigit ->
         fail "invalid digit"
     end;
+
     test_case "unique" `Slow begin fun () ->
       let ns = State.create () in
       let n = 10_000_000 in
@@ -65,6 +67,5 @@ let slow_tests = "slow tests", [
 
 let () =
   run ~compact:true "NUID" [
-    quick_tests;
-    slow_tests;
+    tests;
   ]

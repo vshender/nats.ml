@@ -118,4 +118,4 @@ let client_url server =
   | Reader.Message (ServerMessage.Info info) ->
     let scheme = if info.tls_required then "tls" else "nats" in
     Printf.sprintf "%s://%s:%d" scheme default_hostname port
-  | _ -> failwith "did not receive INFO"
+  | _ -> failwith "client_url: did not receive INFO"

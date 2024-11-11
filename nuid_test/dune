@@ -2,4 +2,4 @@
  (package nuid)
  (name test_nuid)
  (modules test_nuid)
- (libraries nuid alcotest))
+ (libraries alcotest nuid))

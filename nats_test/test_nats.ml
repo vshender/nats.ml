@@ -1,3 +1,5 @@
+(** The [Nats] library tests. *)
+
 let () =
   Alcotest.run ~compact:true "NATS" [
     Test_headers.tests;

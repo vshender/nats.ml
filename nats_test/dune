@@ -2,4 +2,4 @@
  (package nats)
  (name test_nats)
  (modules test_nats test_headers test_parse test_serialize)
- (libraries nats alcotest faraday))
+ (libraries alcotest faraday nats))
