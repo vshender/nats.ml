@@ -14,7 +14,7 @@ type conn_callback = t -> unit
     encountered while processing inbound messages. *)
 type error_callback = t -> Errors.t -> unit
 
-(** [connect ?url ?name ?verbose ?pedantic ?connect_timeout ?closed_cb ?error_cb ?inbox_prefix ()]
+(** [connect ?url ?name ?verbose ?pedantic ?connect_timeout ?ping_interval ?max_pings_outstanding ?closed_cb ?error_cb ?inbox_prefix ()]
     establishes a connection to a NATS server.
 
     - [url] (optional): the URL of the NATS server (default is
@@ -53,13 +53,64 @@ val connect :
   ?name:string ->
   ?verbose:bool ->
   ?pedantic:bool ->
+  ?connect_timeout:float ->
   ?ping_interval:float ->
   ?max_pings_outstanding:int ->
-  ?connect_timeout:float ->
   ?closed_cb:conn_callback ->
   ?error_cb:error_callback ->
   ?inbox_prefix:string ->
   unit -> t
+
+(** [with_client ?url ?name ?verbose ?pedantic ?connect_timeout ?ping_interval ?max_pings_outstanding ?closed_cb ?error_cb ?inbox_prefix f]
+    establishes a connection to a NATS server, executes the function [f] with
+    the connected client, and then safely drains and closes the connection when
+    [f] completes or raises an exception.
+
+    - [url] (optional): the URL of the NATS server (default is
+      "nats://127.0.0.1:4222").
+    - [name] (optional): label the connection with name (shown in NATS
+      monitoring).
+    - [verbose] (optional): turns on [+OK] protocol acknowledgements (turned
+      off by default).
+    - [pedantic] (optional): enables pedantic mode for stricter protocol checks
+      (turned off by default).
+    - [connect_timeout] (optional): specifies the connection timeout in
+      seconds.
+    - [ping_interval] (optional): the period (in seconds) at which the client
+      will be sending PING commands to the server.  Defaults to 120 seconds.
+    - [max_pings_outstanding] (optional): the maximum number of pending PING
+      commands that can be awaiting a response before raising a
+      [StaleConnection] error.  Defaults to 2.
+    - [closed_cb] (optional): a callback function that is called when the
+      client is no longer connected to a server.
+    - [error_cb] (optional): a callback function to report asynchronous errors.
+    - [inbox_prefix] (optional): a custom prefix for inbox subjects.
+    - [f]: the function to execute with the connected client.
+
+    Raises:
+
+    - [NatsError NoServers] if the connection was refused.
+    - [NatsError ConnectionLost] if the connection is lost during the
+      operation.
+    - [NatsError Timeout] if the connection times out.
+    - [NatsError NoInfoReceived] if no INFO message was received from the
+      server.
+    - [NatsError (ProtocolError e)] if there was an error parsing a server
+      message.
+    - Any exception thrown by the user-supplied function [f].
+*)
+val with_client :
+  ?url:string ->
+  ?name:string ->
+  ?verbose:bool ->
+  ?pedantic:bool ->
+  ?connect_timeout:float ->
+  ?ping_interval:float ->
+  ?max_pings_outstanding:int ->
+  ?closed_cb:conn_callback ->
+  ?error_cb:error_callback ->
+  ?inbox_prefix:string ->
+  (t -> 'a) -> 'a
 
 (** [last_error t] is the last error encountered via the connection.  It can be
     used reliably within [closed_cb] in order to find out the reason why the

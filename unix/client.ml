@@ -915,9 +915,9 @@ let connect
     ?(name = client_name)
     ?(verbose = false)
     ?(pedantic = false)
+    ?connect_timeout
     ?(ping_interval = default_ping_interval)
     ?(max_pings_outstanding = default_max_pings_outstanding)
-    ?connect_timeout
     ?(closed_cb = Fun.const ())
     ?(error_cb = default_error_callback)
     ?(inbox_prefix = default_inbox_prefix)
@@ -1000,3 +1000,32 @@ let connect
   conn.msg_thread <- Thread.create msg_loop conn;
 
   conn
+
+let with_client
+    ?url
+    ?name
+    ?verbose
+    ?pedantic
+    ?connect_timeout
+    ?ping_interval
+    ?max_pings_outstanding
+    ?closed_cb
+    ?error_cb
+    ?inbox_prefix
+    f =
+  let c = connect
+      ?url
+      ?name
+      ?verbose
+      ?pedantic
+      ?connect_timeout
+      ?ping_interval
+      ?max_pings_outstanding
+      ?closed_cb
+      ?error_cb
+      ?inbox_prefix
+      ()
+  in
+  Fun.protect
+    ~finally:(fun () -> if state c = Connected then drain c)
+    (fun () -> f c)
