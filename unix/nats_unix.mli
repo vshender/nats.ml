@@ -77,16 +77,16 @@ module Subscription : sig
       the subscription [t]. *)
   val delivered : t -> int
 
+  (** [pending_msgs t] returns the number of pending messages in the internal
+      message queue of the subscription [t]. *)
+  val pending_msgs : t -> int
+
   (** [max_msgs t] returns the optional maximum number of messages the
       subscription [t] will receive.
 
       If set, the subscription automatically unsubscribes after receiving the
       specified number of messages. *)
   val max_msgs : t -> int option
-
-  (** [pending_msgs t] returns the number of pending messages in the internal
-      message queue of the subscription [t]. *)
-  val pending_msgs : t -> int
 
   (** [next_msg ?timeout t] retrieves the next message for the synchronous
       subscription [t], with an optional timeout (in seconds).  If there are no
@@ -105,11 +105,13 @@ module Subscription : sig
   *)
   val next_msg : ?timeout:float -> t -> Message.t
 
-  (** [next_msg ?timeout t] retrieves the next message for the synchronous
+  (** [next_msg_opt ?timeout t] retrieves the next message for the synchronous
       subscription [t], with an optional timeout (in seconds).  If there are no
       pending messages in the subscription's internal message queue, the
       function blocks until a message arrives or the timeout expires (if
-      specified).  Returns [None] if no message is available after the timeout.
+      specified).
+
+    Returns [None] if no message is available after the timeout.
 
     Raises:
 

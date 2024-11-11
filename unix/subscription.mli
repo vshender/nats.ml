@@ -58,6 +58,9 @@ val group : t -> string option
 (** [callback t] returns the callback for handling incoming messages. *)
 val callback : t -> callback option
 
+(** [queue t] returns the pending message queue of the subscription [t]. *)
+val queue : t -> Message.t SyncQueue.t
+
 (** [is_sync t] returns [true] if the subscription [t] is synchronous, and
     [false] otherwise. *)
 val is_sync : t -> bool
@@ -70,16 +73,16 @@ val is_closed : t -> bool
     the subscription [t]. *)
 val delivered : t -> int
 
+(** [pending_msgs t] returns the number of pending messages in the internal
+    message queue of the subscription [t]. *)
+val pending_msgs : t -> int
+
 (** [max_msgs t] returns the optional maximum number of messages the
     subscription [t] will receive.
 
     If set, the subscription automatically unsubscribes after receiving the
     specified number of messages. *)
 val max_msgs : t -> int option
-
-(** [pending_msgs t] returns the number of pending messages in the internal
-    message queue of the subscription [t]. *)
-val pending_msgs : t -> int
 
 (** [close t] closes the subscription [t], preventing it from receiving further
     messages. *)
@@ -92,13 +95,6 @@ val close : t -> unit
 
     Raises [NatsError SubscriptionClosed] if the subscription [t] is closed. *)
 val handle_msg : t -> Message.t -> unit
-
-(** [next_msg_internal t] attempts to retrieve the next message from the
-    subscription's internal queue.  If the queue is empty, it returns [None]
-    immediately.
-
-    This function is intended for internal use by the library. *)
-val next_msg_internal : t -> Message.t option
 
 (** [next_msg ?timeout t] retrieves the next message for the synchronous
     subscription [t], with an optional timeout (in seconds).  If there are no
@@ -120,6 +116,7 @@ val next_msg : ?timeout:float -> t -> Message.t
     subscription [t], with an optional timeout (in seconds).  If there are no
     pending messages in the subscription's internal message queue, the function
     blocks until a message arrives or the timeout expires (if specified).
+
     Returns [None] if no message is available after the timeout.
 
     Raises:

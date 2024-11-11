@@ -112,6 +112,9 @@ val with_client :
   ?inbox_prefix:string ->
   (t -> 'a) -> 'a
 
+(** [is_closed c] is [true] if the connection closed. *)
+val is_closed : t -> bool
+
 (** [last_error t] is the last error encountered via the connection.  It can be
     used reliably within [closed_cb] in order to find out the reason why the
     connection was closed for example. *)
@@ -154,7 +157,6 @@ val subscribe : t -> ?group:string -> ?callback:callback -> string -> Subscripti
     Raises [NatsError ConnectionClosed] if the connection is closed. *)
 val publish : t -> ?reply:string -> string -> string -> unit
 
-val request : t -> ?timeout:float -> string -> string -> Message.t
 (** [request t ?timeout subject payload] sends a request message to the given
     subject and waits for a reply within an optional timeout period.
 
@@ -165,10 +167,11 @@ val request : t -> ?timeout:float -> string -> string -> Message.t
       operation.
     - [NatsError Timeout] if the request times out.
 *)
+val request : t -> ?timeout:float -> string -> string -> Message.t
 
-(** [request t ?timeout subject payload] sends a request message to the given
-    subject and waits for a reply within an optional timeout period.  Returns
-    [None] if the request times out.
+(** [request_opt t ?timeout subject payload] sends a request message to the
+    given subject and waits for a reply within an optional timeout period.
+    Returns [None] if the request times out.
 
     Raises:
 

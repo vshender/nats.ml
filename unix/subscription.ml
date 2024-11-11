@@ -16,7 +16,7 @@ type t = {
   (** An optional callback for handling messages asynchronously. *)
 
   queue : Message.t SyncQueue.t;
-  (** A pending messages queue. *)
+  (** The pending message queue. *)
 
   mutable closed : bool;
   (** Indicates whether the subscription is closed? *)
@@ -78,6 +78,8 @@ let group t = t.group
 
 let callback t = t.callback
 
+let queue t = t.queue
+
 let is_sync t =
   Option.is_none t.callback
 
@@ -87,11 +89,11 @@ let is_closed t =
 let delivered t =
   Mutex.protect t.mutex (fun () -> t.delivered)
 
-let max_msgs t =
-  Mutex.protect t.mutex (fun () -> t.max_msgs)
-
 let pending_msgs t =
   SyncQueue.length t.queue
+
+let max_msgs t =
+  Mutex.protect t.mutex (fun () -> t.max_msgs)
 
 let close t =
   Mutex.protect t.mutex (fun () -> t.closed <- true)
@@ -120,9 +122,6 @@ let handle_msg t msg =
     t.remove_subscription t;
     close t
   end
-
-let next_msg_internal t =
-  SyncQueue.try_get t.queue
 
 (** [with_sync_op ?timeout t f] wraps a synchronous operation on the
     subscription [t], optionally specifying a timeout. *)

@@ -444,7 +444,10 @@ let send_msg_direct c msg =
   let serializer = Faraday.create 0x100 in
   serialize_client_message serializer msg;
   let data = Faraday.serialize_to_bigstring serializer in
-  ignore @@ write_bigarray c.sock data 0 (Bigstringaf.length data)
+  try
+    ignore @@ write_bigarray c.sock data 0 (Bigstringaf.length data)
+  with Unix_error (EPIPE, _, _) ->
+    Errors.nats_error ConnectionLost
 
 (** [send_msg c msg] serializes the given message [msg] and enqueues it for
     sending by the I/O thread, which ensures asynchronous, non-blocking
@@ -516,8 +519,8 @@ let close_from_io_thread c =
     parsing the protocol. *)
 let process_op_err c err =
   set_last_error c err;
-  CurrentSyncOperation.interrupt c.cur_sync_op err;
-  close_from_io_thread c
+  close_from_io_thread c;
+  CurrentSyncOperation.interrupt c.cur_sync_op err
 
 (** [process_err c err_msg] handles error messages from the server. *)
 let process_err c err_msg =
@@ -592,7 +595,12 @@ let rec io_loop c =
       ~finally:begin fun () ->
         Subscriptions.iter c.subscriptions Subscription.close;
         Subscriptions.remove_all c.subscriptions;
-        shutdown c.sock SHUTDOWN_ALL;
+        begin
+          try
+            shutdown c.sock SHUTDOWN_ALL
+          with Unix_error (ENOTCONN, _, _) ->
+            ()
+        end;
         Unix.close c.sock;
         Mutex.protect c.mutex
           begin fun () ->
@@ -635,7 +643,7 @@ let rec io_loop c =
                     c.sock
                     iovec.Faraday.buffer iovec.off iovec.len
                 with
-                | 0 ->
+                | 0 | exception Unix_error (EPIPE, _, _) ->
                   raise @@ Break ConnectionLost
                 | n ->
                   Mutex.protect c.mutex
@@ -711,10 +719,17 @@ let msg_loop c =
   while state c = Connected do
     match SyncQueue.peek ~interrupt_cond:should_stop c.msg_queue with
     | Some sub ->
-      begin match Subscription.next_msg_internal sub with
+      let q = Subscription.queue sub in
+      begin match SyncQueue.try_peek q with
         | Some msg ->
           let callback = Option.get @@ Subscription.callback sub in
-          callback msg
+          begin
+            try
+              callback msg;
+            with exn ->
+              c.options.error_cb c (Errors.MessageCallbackError exn)
+          end;
+          ignore @@ SyncQueue.try_get q
         | None -> ()  (* message queue was cleared *)
       end;
       (* Remove the processed subscription from the queue. *)
@@ -850,7 +865,7 @@ let drain ?timeout c =
     end;
 
   Fun.protect
-    ~finally:(fun () -> close c)
+    ~finally:(fun () -> if state c = Connected then close c)
     begin fun () ->
       flush c ?timeout;
 
@@ -990,7 +1005,12 @@ let connect
           | _ -> ()
         end
     with exn ->
-      shutdown conn.sock SHUTDOWN_ALL;
+      begin
+        try
+          shutdown conn.sock SHUTDOWN_ALL
+        with Unix_error (ENOTCONN, _, _) ->
+          ()
+      end;
       Unix.close conn.sock;
       Faraday.close conn.serializer;
       raise exn
