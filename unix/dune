@@ -4,4 +4,5 @@
  (libraries threads unix uri nats nuid)
  (preprocess
   (per_module
+   ((pps ppx_deriving.std) message errors)
    ((action (run %{bin:cppo} -V OCAML:%{ocaml_version} %{input-file})) compat))))

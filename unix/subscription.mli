@@ -35,7 +35,7 @@ val create :
   ?schedule_message_handling : (t -> msg:Message.t -> unit) ->
   ?sync_op_started :
     (t ->
-     signal_interrupt:(Errors.nats_error -> unit) ->
+     signal_interrupt:(Errors.t -> unit) ->
      timeout_time:float option ->
      unit) ->
   ?sync_op_finished : (t -> unit) ->

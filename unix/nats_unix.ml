@@ -1,6 +1,10 @@
 (** A [Unix] library based client for NATS. *)
 
-include Errors
+module Errors = Errors
+
+type nats_error = Errors.t
+
+exception NatsError = Errors.NatsError
 
 module Headers = Message.Headers
 

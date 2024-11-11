@@ -2,8 +2,6 @@
 
 open Compat
 
-open Errors
-
 type callback = Message.t -> unit
 
 (** The type of NATS subscriptions. *)
@@ -39,7 +37,7 @@ type t = {
   schedule_message_handling : (t -> msg:Message.t -> unit) option;
   (** An optional function to schedule asynchronous message handling. *)
   sync_op_started : (t ->
-                     signal_interrupt:(nats_error -> unit) ->
+                     signal_interrupt:(Errors.t -> unit) ->
                      timeout_time:float option ->
                      unit) option;
   (** An optional callback invoked when a synchronous operation starts. *)
@@ -53,7 +51,7 @@ let create
     ~flush ~unsubscribe ~remove_subscription
     sid subject group callback =
   if Option.is_none callback && Option.is_some schedule_message_handling then
-    nats_error AsyncSubRequired;
+    Errors.nats_error AsyncSubRequired;
   {
     sid;
     subject;
@@ -100,7 +98,7 @@ let close t =
 
 let handle_msg t msg =
   if is_closed t then
-    nats_error SubscriptionClosed;
+    Errors.nats_error SubscriptionClosed;
 
   SyncQueue.put t.queue msg;
 
@@ -143,15 +141,15 @@ let with_sync_op ?timeout t f =
     begin fun () ->
       let result = f interrupt_cond in
       match !sync_op_err with
-      | Some err -> nats_error err
+      | Some err -> Errors.nats_error err
       | None     -> result
     end
 
 let next_msg ?timeout t =
   if not (is_sync t) then
-    nats_error SyncSubRequired;
+    Errors.nats_error SyncSubRequired;
   if is_closed t && SyncQueue.is_empty t.queue then
-    nats_error SubscriptionClosed;
+    Errors.nats_error SubscriptionClosed;
 
   Option.get @@
   with_sync_op ?timeout t
@@ -160,12 +158,12 @@ let next_msg ?timeout t =
 let next_msg_opt ?timeout t =
   try
     Some (next_msg t ?timeout)
-  with NatsError Timeout ->
+  with Errors.NatsError Timeout ->
     None
 
 let unsubscribe ?max_msgs t =
   if is_closed t then
-    nats_error SubscriptionClosed;
+    Errors.nats_error SubscriptionClosed;
 
   let remove_sub =
     Mutex.protect t.mutex
@@ -182,9 +180,9 @@ let unsubscribe ?max_msgs t =
 
 let drain ?timeout t =
   if is_sync t then
-    nats_error AsyncSubRequired;
+    Errors.nats_error AsyncSubRequired;
   if is_closed t then
-    nats_error SubscriptionClosed;
+    Errors.nats_error SubscriptionClosed;
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in

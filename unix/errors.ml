@@ -1,8 +1,15 @@
-(** NATS errors. *)
+(** The NATS errors. *)
 
 open Nats.Protocol
 
-type nats_error =
+(** [pp_exn fmt exn] pretty-prints an exception [exn] *)
+let pp_exn fmt exn = Format.fprintf fmt "%s" @@ Printexc.to_string exn
+
+(** [equal_exn exn1 exn2] checks whether two exceptions [exn1] and [exn2] are
+    equal. *)
+let equal_exn = ( = )
+
+type t =
   | NoServers
   | ConnectionClosed
   | ConnectionLost
@@ -22,16 +29,8 @@ type nats_error =
   | AuthenticationRevoked
   | AccountAuthenticationExpired
   | ServerError of string
-  (* | BadQueueName             (\** Invalid queue name. *\) *)
-  (* | ErrSlowConsumer          (\** Slow consumer, messages dropped. *\) *)
-  (* | BadTimeout               (\** Invalid timeout. *\) *)
-  (* | JsonParse                (\** Connect message, JSON parse error. *\) *)
-  (* | NoEchoNotSupported       (\** No echo option not supported by this server. *\) *)
-  (* | ClientIDNotSupported     (\** Client ID not supported by this server *\) *)
-  (* | MsgNotBound              (\** Message is not bound to subscription/connection. *\) *)
-  (* | MsgNoReply               (\** Message does not have a reply. *\) *)
-  (* | Disconnected             (\** Server is disconnected. *\) *)
-  (* | NoResponders             (\** No responders available for request. *\) *)
+  | MessageCallbackError of exn
+[@@deriving eq, show { with_path = false }]
 
 let error_message = function
   | NoServers                    -> "no servers available for connection"
@@ -53,16 +52,7 @@ let error_message = function
   | AuthenticationRevoked        -> "authentication revoked"
   | AccountAuthenticationExpired -> "account authentication expired"
   | ServerError e                -> e
-  (* | BadQueueName           -> "nats: invalid queue name" *)
-  (* | ErrSlowConsumer        -> "nats: slow consumer, messages dropped" *)
-  (* | BadTimeout             -> "nats: invalid timeout" *)
-  (* | JsonParse              -> "nats: connect message, JSON parse error" *)
-  (* | NoEchoNotSupported     -> "nats: no echo option not supported by this server" *)
-  (* | ClientIDNotSupported   -> "nats: client ID not supported by this server" *)
-  (* | MsgNotBound            -> "nats: message is not bound to subscription/connection" *)
-  (* | MsgNoReply             -> "nats: message does not have a reply" *)
-  (* | Disconnected           -> "nats: server is disconnected" *)
-  (* | NoResponders           -> "nats: no responders available for request" *)
+  | MessageCallbackError exn     -> Printf.sprintf "message callback error: %s" @@ Printexc.to_string exn
 
 let parse_server_err_msg err_msg =
   match String.lowercase_ascii err_msg with
@@ -85,6 +75,6 @@ let parse_server_err_msg err_msg =
   | e ->
     ServerError e
 
-exception NatsError of nats_error
+exception NatsError of t
 
 let nats_error err = raise (NatsError err)

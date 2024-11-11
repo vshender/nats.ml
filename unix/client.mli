@@ -1,7 +1,5 @@
 (** The NATS client module. *)
 
-open Errors
-
 (** The type of NATS client. *)
 type t
 
@@ -14,7 +12,7 @@ type conn_callback = t -> unit
 
 (** The type of callback functions used to process asynchronous errors
     encountered while processing inbound messages. *)
-type error_callback = t -> nats_error -> unit
+type error_callback = t -> Errors.t -> unit
 
 (** [connect ?url ?name ?verbose ?pedantic ?connect_timeout ?closed_cb ?error_cb ?inbox_prefix ()]
     establishes a connection to a NATS server.
@@ -63,10 +61,10 @@ val connect :
   ?inbox_prefix:string ->
   unit -> t
 
-val last_error : t -> nats_error option
 (** [last_error t] is the last error encountered via the connection.  It can be
     used reliably within [closed_cb] in order to find out the reason why the
     connection was closed for example. *)
+val last_error : t -> Errors.t option
 
 (** [new_inbox t] returns a unique inbox that can be used for NATS requests or
     subscriptions. *)
