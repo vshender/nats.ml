@@ -17,3 +17,21 @@ type t = {
   (** The actual message payload, typically a string representing the data
       being communicated. *)
 }
+
+(** [make] is a constructor for the message records. *)
+val make :
+  subject:string ->
+  ?reply:string ->
+  sid:int ->
+  ?headers:Headers.t ->
+  payload:string ->
+  unit -> t
+
+(** [equal msg1 msg2] is [true] if [msg1] and [msg2] are equal. *)
+val equal : t -> t -> bool
+
+(** [pp fmt msg] pretty-prints [msg]. *)
+val pp : Format.formatter -> t -> unit
+
+(** [show msg] is a string representation of [msg]. *)
+val show : t -> string

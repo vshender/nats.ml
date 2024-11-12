@@ -9,3 +9,4 @@ type t = {
   headers : Headers.t option;
   payload : string;
 }
+[@@deriving eq, make, show { with_path = false }]

@@ -19,24 +19,33 @@ module Headers : sig
       [version] and [headers]. *)
   val make : ?version:int * int -> ?headers:(string * string) list -> unit -> t
 
-  (** [version t] returns the version of [t]. *)
+  (** [equal h1 h2] is [true] if [h1] and [h2] are equal. *)
+  val equal : t -> t -> bool
+
+  (** [pp fmt h] pretty-prints [h]. *)
+  val pp : Format.formatter -> t -> unit
+
+  (** [show h] is a string representation of [h]. *)
+  val show : t -> string
+
+  (** [version h] returns the version of [h]. *)
   val version : t -> int * int
 
-  (** [get key t] returns the first value found matching [key] in a
-      case-sensitive lookup in [t].
+  (** [get key h] returns the first value found matching [key] in a
+      case-sensitive lookup in [h].
 
       Returns [None] if a matching [key] is not found.  *)
   val get : string -> t -> string option
 
-  (** [values key t] returns a list of all values that case-sensitive match
-      [key] in [t]. *)
+  (** [values key h] returns a list of all values that case-sensitive match
+      [key] in [h]. *)
   val values : string -> t -> string list
 
-  (** [iter f t] applies [f] in turn to each key-value pair in [t]. *)
+  (** [iter f h] applies [f] in turn to each key-value pair in [h]. *)
   val iter : (string -> string -> unit) -> t -> unit
 
-  (** [fold f t init] computes [(f kN vN ... (f k2 v2 (f k1 v1 init)) ...)],
-      where [(k1, v1), ..., (kN, vN)] are the elements of [t].  Each header is
+  (** [fold f h init] computes [(f kN vN ... (f k2 v2 (f k1 v1 init)) ...)],
+      where [(k1, v1), ..., (kN, vN)] are the elements of [h].  Each header is
       presented exactly once to [f]. *)
   val fold : (string -> string -> 'acc -> 'acc) -> t -> 'acc -> 'acc
 end

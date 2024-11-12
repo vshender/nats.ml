@@ -1,0 +1,5 @@
+(test
+ (package nats-unix)
+ (name test_nats_unix)
+ (modules test_nats_unix test_client test_subscription util)
+ (libraries alcotest nats-server nats-unix))
