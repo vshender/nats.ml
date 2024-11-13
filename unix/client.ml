@@ -566,12 +566,14 @@ let read_client_msg ?timeout c =
     | Reader.Message msg ->
       msg
     | Reader.Need_input ->
-      Socket.read
-        ?timeout:(remaining_time ())
-        c.sock
-        c.in_buffer 0 (Bytes.length c.in_buffer)
-      |> begin function
-        | 0 ->
+      begin
+        match
+          Socket.read
+            ?timeout:(remaining_time ())
+            c.sock
+            c.in_buffer 0 (Bytes.length c.in_buffer)
+        with
+        | 0 | exception Unix_error (ECONNRESET, _, _) ->
           Errors.nats_error ConnectionLost;
         | n ->
           Reader.feed c.reader c.in_buffer 0 n;
@@ -628,7 +630,7 @@ let rec io_loop c =
           (* Read incoming data. *)
           if List.length readable > 0 then begin
             match read c.sock c.in_buffer 0 (Bytes.length c.in_buffer) with
-            | 0 ->
+            | 0 | exception Unix_error (ECONNRESET, _, _) ->
               raise @@ Break ConnectionLost
             | n ->
               Reader.feed c.reader c.in_buffer 0 n

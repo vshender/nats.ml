@@ -107,15 +107,37 @@ let client_url server =
   let port = client_port server in
   let addr = ADDR_INET (inet_addr_of_string default_hostname, port) in
   let sock = socket PF_INET SOCK_STREAM 0 in
-  Unix.connect sock addr;
+  begin
+    try
+      Unix.connect sock addr;
+    with
+      Unix_error (ECONNREFUSED, _, _) -> failwith "NATS server connection refused"
+  end;
 
-  let buf = Bytes.create 0x1000
-  and reader = Reader.create () in
-  let n = read sock buf 0 (Bytes.length buf) in
+  Fun.protect
+    begin fun () ->
+      let buf = Bytes.create 0x1000
+      and reader = Reader.create () in
+      let n =
+        try
+          read sock buf 0 (Bytes.length buf)
+        with
+          Unix_error (ECONNRESET, _, _) -> failwith "NATS server connection lost"
+      in
 
-  Reader.feed reader buf 0 n;
-  match Reader.next_msg reader with
-  | Reader.Message (ServerMessage.Info info) ->
-    let scheme = if info.tls_required then "tls" else "nats" in
-    Printf.sprintf "%s://%s:%d" scheme default_hostname port
-  | _ -> failwith "client_url: did not receive INFO"
+      Reader.feed reader buf 0 n;
+      match Reader.next_msg reader with
+      | Reader.Message (ServerMessage.Info info) ->
+        let scheme = if info.tls_required then "tls" else "nats" in
+        Printf.sprintf "%s://%s:%d" scheme default_hostname port
+      | _ -> failwith "client_url: did not receive INFO"
+    end
+    ~finally:begin fun () ->
+      begin
+        try
+          shutdown sock SHUTDOWN_ALL
+        with Unix_error (ENOTCONN, _, _) ->
+          ()
+      end;
+      close sock
+    end

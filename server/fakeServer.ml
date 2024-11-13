@@ -32,7 +32,12 @@ let run ?port msgs =
           | `Read    -> ignore @@ read sock buf 0 (Bytes.length buf);
           | `Delay n -> Thread.delay n
         end;
-      shutdown sock SHUTDOWN_ALL;
+      begin
+        try
+          shutdown sock SHUTDOWN_ALL
+        with Unix_error (ENOTCONN, _, _) ->
+          ()
+      end;
       close sock
     end
     ();
