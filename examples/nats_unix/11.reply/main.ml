@@ -9,17 +9,18 @@ let main () =
   (* Create a new unique subject (inbox) that will be used to receive replies. *)
   let reply_to = Client.new_inbox nc in
 
-  (* Create two queue subscriptions on the "request" subject with the same
-     queue group.  The subscribers will reply to any message they receive by
-     publishing a message to the subject specified in the [reply] field of
-     the received message. *)
-  let _sub1 = Client.subscribe nc "request" ~group:"service"
+  (* Create two subscriptions with the same queue group to handle incoming
+     requests on the [request] subject.  This means they will distribute the
+     messages among themselves (load balancing).  The subscribers will reply to
+     any message they receive by publishing a message to the subject specified
+     in the [reply] field of the received message. *)
+  let sub1 = Client.subscribe nc "request" ~group:"service"
       ~callback:(fun msg ->
           Client.publish
             nc
             (Option.get msg.reply)
             (Printf.sprintf "srv1: reply to %s" msg.payload))
-  and _sub2 = Client.subscribe nc "request" ~group:"service"
+  and sub2 = Client.subscribe nc "request" ~group:"service"
       ~callback:(fun msg ->
           Client.publish
             nc
@@ -41,14 +42,16 @@ let main () =
   Client.publish nc ~reply:reply_to "request" "request 6";
 
   (* Flush the connection to ensure all published requests are sent to the
-     server and then received by the application before proceeding. *)
+     server and received by the subscribers. *)
   Client.flush nc;
 
-  (* It is not guaranteed that all requests have been processed at this point,
-     as processing is done asynchronously. *)
+  (* Wait until all messages are processed by subscribers and responses are
+     sent to the server. *)
+  Subscription.drain sub1;
+  Subscription.drain sub2;
 
-  (* Drain the connection to ensure all published responses are sent to the
-     server and then received and processed by the application. *)
+  (* Drain the connection to ensure all buffered messages received on
+     asynchronous subscriptions are processed before closing the connection. *)
   Client.drain nc
 
 let () = main ()

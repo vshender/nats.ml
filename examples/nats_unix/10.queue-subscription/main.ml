@@ -7,7 +7,8 @@ let main () =
   let nc = Client.connect ~url:"nats://127.0.0.1:4222" () in
 
   (* Create two queue subscriptions on the "greet.*" wildcard with the same
-     queue group. *)
+     queue group, which means they will distribute the messages among
+     themselves (load balancing). *)
   let _sub1 = Client.subscribe nc "greet.*" ~group:"test"
       ~callback:(fun msg ->
           Printf.printf "sub1: msg data: %s on subject %s\n%!"
