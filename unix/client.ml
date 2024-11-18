@@ -447,7 +447,7 @@ let send_msg_direct c msg =
   try
     ignore @@ write_bigarray c.sock data 0 (Bigstringaf.length data)
   with Unix_error (EPIPE, _, _) ->
-    Errors.nats_error ConnectionLost
+    nats_error ConnectionLost
 
 (** [send_msg c msg] serializes the given message [msg] and enqueues it for
     sending by the I/O thread, which ensures asynchronous, non-blocking
@@ -456,7 +456,7 @@ let send_msg_direct c msg =
     Raises [NatsError ConnectionClosed] if the connection is closed. *)
 let send_msg c msg =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   Mutex.protect c.mutex
     (fun () -> serialize_client_message c.serializer msg)
@@ -471,7 +471,7 @@ let send_ping c =
 
 let flush ?timeout c =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
@@ -484,12 +484,12 @@ let flush ?timeout c =
     begin fun () ->
       match PingPongTracker.wait ping with
       | Acknowledged -> ()
-      | Error err    -> Errors.nats_error err
+      | Error err    -> nats_error err
     end
 
 let close c =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   Mutex.protect c.mutex (fun () -> c.state <- Closing);
 
@@ -574,18 +574,18 @@ let read_client_msg ?timeout c =
             c.in_buffer 0 (Bytes.length c.in_buffer)
         with
         | 0 | exception Unix_error (ECONNRESET, _, _) ->
-          Errors.nats_error ConnectionLost;
+          nats_error ConnectionLost
         | n ->
           Reader.feed c.reader c.in_buffer 0 n;
           loop ()
       end
     | Reader.Parse_error (_, e) ->
-      Errors.nats_error (ProtocolError e)
+      nats_error (ProtocolError e)
   in
   try
     loop ()
   with Socket.Timed_out ->
-    Errors.nats_error Timeout
+    nats_error Timeout
 
 (** [io_loop c] runs the I/O loop for the client [c], managing both incoming
     and outgoing messages. *)
@@ -729,7 +729,7 @@ let msg_loop c =
             try
               callback msg;
             with exn ->
-              c.options.error_cb c (Errors.MessageCallbackError exn)
+              c.options.error_cb c (MessageCallbackError exn)
           end;
           ignore @@ SyncQueue.try_get q
         | None -> ()  (* message queue was cleared *)
@@ -756,7 +756,7 @@ let schedule_message_handling c sub ~msg:_msg =
     Raises [NatsError ConnectionClosed] if the connection is closed. *)
 let unsubscribe c sub =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   let unsub_msg = ClientMessage.UnSub
       (UnSub.make
@@ -782,7 +782,7 @@ let sync_sub_op_finished c _sub =
 
 let subscribe c ?group ?callback subject =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   let schedule_message_handling =
     match callback with
@@ -806,14 +806,14 @@ let subscribe c ?group ?callback subject =
 
 let publish c ?reply subject payload =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   let pub_msg = ClientMessage.Pub (Pub.make ~subject ?reply ~payload ()) in
   send_msg c pub_msg
 
 let request c ?timeout subject payload =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   let timeout_time =
     timeout |> Option.map (fun timeout -> Unix.gettimeofday () +. timeout) in
@@ -834,7 +834,7 @@ let request c ?timeout subject payload =
 
           match PendingRequest.wait req with
           | Response msg  -> msg
-          | Error err     -> Errors.nats_error err
+          | Error err     -> nats_error err
         end
     end
 
@@ -846,7 +846,7 @@ let request_opt c ?timeout subject payload =
 
 let drain ?timeout c =
   if is_closed c then
-    Errors.nats_error ConnectionClosed;
+    nats_error ConnectionClosed;
 
   let timeout_time, timed_out =
     match timeout with
@@ -878,7 +878,7 @@ let drain ?timeout c =
         begin fun () ->
           if not (SyncQueue.join c.msg_queue ?interrupt_cond:timed_out) then begin
             SyncQueue.clear c.msg_queue;
-            Errors.nats_error Timeout
+            nats_error Timeout
           end
         end
     end
@@ -891,7 +891,7 @@ let process_expected_info ?timeout c =
   | ServerMessage.Info info ->
     if info.Info.tls_required then
       failwith "client doesn't support TLS";
-  | _ -> Errors.nats_error NoInfoReceived
+  | _ -> nats_error NoInfoReceived
 
 (** [send_connect ?timeout c] sends a CONNECT protocol message to the server
     and waits for a flush to return from the server for error processing. *)
@@ -924,8 +924,8 @@ let send_connect ?timeout c =
   in
   match msg with
   | ServerMessage.Pong    -> ()
-  | ServerMessage.Err msg -> Errors.nats_error (parse_server_err_msg msg)
-  | _                     -> Errors.nats_error (UnexpectedProtocol msg)
+  | ServerMessage.Err msg -> nats_error (parse_server_err_msg msg)
+  | _                     -> nats_error (UnexpectedProtocol msg)
 
 let connect
     ?(url = default_url)
@@ -965,7 +965,7 @@ let connect
     try
       Socket.connect ?timeout:(remaining_time ()) sock addr
     with Unix_error (ECONNREFUSED, _, _) ->
-      Errors.nats_error NoServers
+      nats_error NoServers
   end;
 
   let nuid = Nuid.State.create () in
