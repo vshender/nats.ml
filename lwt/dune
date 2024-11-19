@@ -1,0 +1,4 @@
+(library
+ (name nats_lwt)
+ (public_name nats-lwt)
+ (libraries lwt lwt.unix uri nats nuid))

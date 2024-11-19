@@ -48,6 +48,18 @@
   (alcotest (and (>= 1.6.0) :with-test))))
 
 (package
+ (name nats-lwt)
+ (synopsis
+  "An Lwt-based client for NATS, the cloud native messaging system")
+ (depends
+  (ocaml (>= 4.14.0))
+  (nats (= :version))
+  (nuid (= :version))
+  (lwt (>= 5.6.1))
+  (uri (>= 4.2.0))
+  (alcotest (and (>= 1.6.0) :with-tests))))
+
+(package
  (name nuid)
  (synopsis
   "A highly performant unique identifier generator")
