@@ -2,6 +2,8 @@
 
 open Compat
 
+open Nats
+
 type callback = Message.t -> unit
 
 (** The type of NATS subscriptions. *)

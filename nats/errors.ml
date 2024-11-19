@@ -1,6 +1,6 @@
 (** The NATS errors. *)
 
-open Nats.Protocol
+open Protocol
 
 (** [pp_exn fmt exn] pretty-prints an exception [exn] *)
 let pp_exn fmt exn = Format.fprintf fmt "%s" @@ Printexc.to_string exn

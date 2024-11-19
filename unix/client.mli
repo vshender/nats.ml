@@ -12,7 +12,7 @@ type conn_callback = t -> unit
 
 (** The type of callback functions used to process asynchronous errors
     encountered while processing inbound messages. *)
-type error_callback = t -> Errors.t -> unit
+type error_callback = t -> Nats.Errors.t -> unit
 
 (** [connect ?url ?name ?verbose ?pedantic ?connect_timeout ?ping_interval ?max_pings_outstanding ?closed_cb ?error_cb ?inbox_prefix ()]
     establishes a connection to a NATS server.
@@ -118,7 +118,7 @@ val is_closed : t -> bool
 (** [last_error t] is the last error encountered via the connection.  It can be
     used reliably within [closed_cb] in order to find out the reason why the
     connection was closed for example. *)
-val last_error : t -> Errors.t option
+val last_error : t -> Nats.Errors.t option
 
 (** [new_inbox t] returns a unique inbox that can be used for NATS requests or
     subscriptions. *)

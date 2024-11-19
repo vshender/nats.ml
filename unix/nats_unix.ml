@@ -1,6 +1,6 @@
 (** A [Unix] library based client for NATS. *)
 
-module Errors = Errors
+module Errors = Nats.Errors
 
 type nats_error = Errors.t
 

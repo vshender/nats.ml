@@ -1,6 +1,6 @@
 (** The NATS errors. *)
 
-open Nats.Protocol
+open Protocol
 
 (** The type of NATS errors. *)
 type t =

@@ -4,6 +4,8 @@
     message handling in a thread-safe manner.
 *)
 
+open Nats
+
 (** The type of NATS subscriptions. *)
 type t
 

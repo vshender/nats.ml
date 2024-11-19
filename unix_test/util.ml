@@ -9,7 +9,7 @@ let (-:) name f = Alcotest.test_case name `Quick f
 let message = Alcotest.testable Message.pp Message.equal
 
 (** The implementation of [Alcotest.testable] for [nats_error]. *)
-let nats_error = Alcotest.testable Errors.pp Errors.equal
+let nats_error = Alcotest.testable Nats.Errors.pp Nats.Errors.equal
 
 (** [wait_until_closed c n] waits until the client [c] is closed or until [n]
     attempts have been made.  The function checks if the client is closed and,

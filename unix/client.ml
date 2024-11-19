@@ -4,11 +4,11 @@ open Compat
 
 open Unix
 
+open Nats
+open Nats.Errors
 open Nats.Parse
 open Nats.Serialize
 open Nats.Protocol
-
-open Errors
 
 let client_name    = "nats.ml-unix"
 let client_lang    = "ocaml"
