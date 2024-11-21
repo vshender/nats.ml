@@ -2,7 +2,8 @@
 
 open Compat
 
-open Nats
+module Errors = Nats.Errors
+module Message = Nats.Message
 
 type callback = Message.t -> unit
 

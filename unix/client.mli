@@ -4,7 +4,7 @@
 type t
 
 (** The type of callback functions for handling income messages. *)
-type callback = Message.t -> unit
+type callback = Nats.Message.t -> unit
 
 (** The type of callback functions used for asynchronous connection events such
     as closed connections. *)
@@ -167,7 +167,7 @@ val publish : t -> ?reply:string -> string -> string -> unit
       operation.
     - [NatsError Timeout] if the request times out.
 *)
-val request : t -> ?timeout:float -> string -> string -> Message.t
+val request : t -> ?timeout:float -> string -> string -> Nats.Message.t
 
 (** [request_opt t ?timeout subject payload] sends a request message to the
     given subject and waits for a reply within an optional timeout period.
@@ -179,7 +179,7 @@ val request : t -> ?timeout:float -> string -> string -> Message.t
     - [NatsError ConnectionLost] if the connection is lost during the
       operation.
 *)
-val request_opt : t -> ?timeout:float -> string -> string -> Message.t option
+val request_opt : t -> ?timeout:float -> string -> string -> Nats.Message.t option
 
 (** [flush ?timeout t] performs a round trip to the server and returns when it
     receives the internal reply, or if the call times-out ([timeout] is

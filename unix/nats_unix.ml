@@ -6,9 +6,9 @@ type nats_error = Errors.t
 
 exception NatsError = Errors.NatsError
 
-module Headers = Message.Headers
+module Headers = Nats.Message.Headers
 
-module Message = Message
+module Message = Nats.Message
 
 module Client = Client
 

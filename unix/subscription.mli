@@ -4,13 +4,11 @@
     message handling in a thread-safe manner.
 *)
 
-open Nats
-
 (** The type of NATS subscriptions. *)
 type t
 
 (** The type of callback functions for message handling. *)
-type callback = Message.t -> unit
+type callback = Nats.Message.t -> unit
 
 (** [create ?schedule_message_handling ?sync_op_started ?sync_op_finished ~flush ~unsubscribe ~remove_subscription sid subject group callback]
     creates a new NATS subscription with the given parameters.
@@ -34,10 +32,10 @@ type callback = Message.t -> unit
     Raises [NatsError AsyncSubRequired] if [schedule_message_handling] is
     provided for a synchronous subscription. *)
 val create :
-  ?schedule_message_handling : (t -> msg:Message.t -> unit) ->
+  ?schedule_message_handling : (t -> msg:Nats.Message.t -> unit) ->
   ?sync_op_started :
     (t ->
-     signal_interrupt:(Errors.t -> unit) ->
+     signal_interrupt:(Nats.Errors.t -> unit) ->
      timeout_time:float option ->
      unit) ->
   ?sync_op_finished : (t -> unit) ->
@@ -61,7 +59,7 @@ val group : t -> string option
 val callback : t -> callback option
 
 (** [queue t] returns the pending message queue of the subscription [t]. *)
-val queue : t -> Message.t SyncQueue.t
+val queue : t -> Nats.Message.t SyncQueue.t
 
 (** [is_sync t] returns [true] if the subscription [t] is synchronous, and
     [false] otherwise. *)
@@ -96,7 +94,7 @@ val close : t -> unit
     provided scheduling function.
 
     Raises [NatsError SubscriptionClosed] if the subscription [t] is closed. *)
-val handle_msg : t -> Message.t -> unit
+val handle_msg : t -> Nats.Message.t -> unit
 
 (** [next_msg ?timeout t] retrieves the next message for the synchronous
     subscription [t], with an optional timeout (in seconds).  If there are no
@@ -112,7 +110,7 @@ val handle_msg : t -> Message.t -> unit
       operation.
     - [NatsError Timeout] if the operation times out.
 *)
-val next_msg : ?timeout:float -> t -> Message.t
+val next_msg : ?timeout:float -> t -> Nats.Message.t
 
 (** [next_msg_opt ?timeout t] retrieves the next message for the synchronous
     subscription [t], with an optional timeout (in seconds).  If there are no
@@ -129,7 +127,7 @@ val next_msg : ?timeout:float -> t -> Message.t
     - [NatsError ConnectionLost] if the connection is lost during the
       operation.
 *)
-val next_msg_opt : ?timeout:float -> t -> Message.t option
+val next_msg_opt : ?timeout:float -> t -> Nats.Message.t option
 
 (** [unsubscribe ?max_msgs t] unsubscribes the subscription [t].
 

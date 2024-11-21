@@ -1,6 +1,6 @@
 (** The module representing a message in the NATS protocol. *)
 
-module Headers = Nats.Protocol.Headers
+module Headers = Protocol.Headers
 
 type t = {
   subject : string;

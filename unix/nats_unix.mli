@@ -41,6 +41,12 @@ module Errors : sig
   exception NatsError of t
 end
 
+(** The NATS message headers module. *)
+module Headers = Nats.Message.Headers
+
+(** The module representing a message in the NATS protocol. *)
+module Message = Nats.Message
+
 module Client = Client
 
 (** The module for managing NATS subscriptions. *)
@@ -144,8 +150,3 @@ module Subscription : sig
   *)
   val drain : ?timeout:float -> t -> unit
 end
-
-(** The NATS message headers module. *)
-module Headers = Message.Headers
-
-module Message = Message
